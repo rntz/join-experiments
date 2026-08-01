@@ -232,7 +232,7 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
     // Get the map for the trie at self.saved[mark + pos]. Must not be bottomed
     // out at a Leaf!
     #[inline(always)]
-    fn level_map(&self, mark: usize, pos: usize) -> &'a HashMap<Value, Trie> {
+    fn level_map(&self, mark: usize, pos: usize) -> &'a TrieMap {
         match self.saved[mark + pos] {
             Trie::Node(map) => map,
             Trie::Leaf => unsafe { core::hint::unreachable_unchecked() },
@@ -286,9 +286,66 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
 
 
 // ---------- TRIE INDEXES ----------
+
+// A dependency-free FxHash (à la rustc-hash): a fast, non-cryptographic hasher. The default
+// HashMap uses SipHash, which is overkill for our interned integer keys; the whole join is
+// `.get(key)` probes, so hash *compute* is a real slice of runtime. Our keys are `Value`
+// (= usize), so in practice only the `write_usize` fast path is exercised.
+const FX_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+const FX_ROTATE: u32 = 5;
+
+#[derive(Default)]
+struct FxHasher { hash: u64 }
+
+impl FxHasher {
+    #[inline]
+    fn add(&mut self, i: u64) {
+        self.hash = (self.hash.rotate_left(FX_ROTATE) ^ i).wrapping_mul(FX_SEED);
+    }
+}
+
+impl std::hash::Hasher for FxHasher {
+    #[inline]
+    fn finish(&self) -> u64 { self.hash }
+    #[inline]
+    fn write_usize(&mut self, i: usize) { self.add(i as u64); }
+    #[inline]
+    fn write_u64(&mut self, i: u64) { self.add(i); }
+    #[inline]
+    fn write_u32(&mut self, i: u32) { self.add(i as u64); }
+    #[inline]
+    fn write_u8(&mut self, i: u8) { self.add(i as u64); }
+    #[inline]
+    fn write(&mut self, mut bytes: &[u8]) {
+        while bytes.len() >= 8 {
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(&bytes[..8]);
+            self.add(u64::from_le_bytes(buf));
+            bytes = &bytes[8..];
+        }
+        if !bytes.is_empty() {
+            let mut buf = [0u8; 8];
+            buf[..bytes.len()].copy_from_slice(bytes);
+            self.add(u64::from_le_bytes(buf));
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+struct FxBuildHasher;
+impl std::hash::BuildHasher for FxBuildHasher {
+    type Hasher = FxHasher;
+    #[inline]
+    fn build_hasher(&self) -> FxHasher { FxHasher::default() }
+}
+
+type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
+type FxHashSet<K> = HashSet<K, FxBuildHasher>;
+type TrieMap = FxHashMap<Value, Trie>;
+
 enum Trie {
     Leaf,
-    Node(HashMap<Value, Trie>),
+    Node(TrieMap),
 }
 
 // ==== LONG ASIDE ABOUT LEAPFROG TRIEJOIN AND SORTING-BASED APPROACHES TO WCOJS ====
@@ -393,7 +450,7 @@ impl Trie {
             level_to_col.into_iter().map(|c| c.expect("every trie level must have a column")).collect();
 
         let arity = shape.len();
-        let mut root = Trie::Node(HashMap::new());
+        let mut root = Trie::Node(TrieMap::default());
         // For the N == 0 case (an atom with no variables, like R(2)) there is no root
         // Node; we only need to know whether any row survived the filters.
         let mut any_row = false;
@@ -418,7 +475,7 @@ impl Trie {
                 match node {
                     Trie::Node(map) => {
                         node = map.entry(row[col]).or_insert_with(|| {
-                            if deepest { Trie::Leaf } else { Trie::Node(HashMap::new()) }
+                            if deepest { Trie::Leaf } else { Trie::Node(TrieMap::default()) }
                         });
                     }
                     Trie::Leaf => unreachable!("only the deepest level holds Leaves"),
@@ -639,8 +696,8 @@ mod tests {
     // stays near-linear in the number of 2-paths. Used to cross-check the WCOJ plan, both in
     // the unit test above and in the SNAP benchmark below.
     fn bruteforce_triangle_query(edges: &[(Value, Value)]) -> Vec<Vec<Value>> {
-        let edge_set: HashSet<(Value, Value)> = edges.iter().copied().collect();
-        let mut out: HashMap<Value, Vec<Value>> = HashMap::new();
+        let edge_set: FxHashSet<(Value, Value)> = edges.iter().copied().collect();
+        let mut out: FxHashMap<Value, Vec<Value>> = FxHashMap::default();
         for &(a, b) in edges { out.entry(a).or_default().push(b); }
         let mut want: Vec<Vec<Value>> = Vec::new();
         for &(x, y) in edges {
