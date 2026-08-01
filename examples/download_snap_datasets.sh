@@ -24,6 +24,8 @@ DATASETS=(
     "wiki-Vote"
     "email-Enron"
     "soc-Epinions1"
+    "soc-Slashdot0811"
+    "twitter_combined"
 )
 
 mkdir -p "$DATA_DIR"

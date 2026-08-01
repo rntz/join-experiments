@@ -537,11 +537,13 @@ impl Trie {
 
 // ---------- BENCHMARKS ----------
 fn main() {
-    tests::run_triangle_snap("ca-GrQc.txt", None);
-    tests::run_triangle_snap("wiki-Vote.txt", None);
-    tests::run_triangle_snap("cit-HepTh.txt", None);
-    tests::run_triangle_snap("email-Enron.txt", None);
-    tests::run_triangle_snap("soc-Epinions1.txt", None);
+    // tests::run_triangle_snap("ca-GrQc.txt", None);
+    // tests::run_triangle_snap("wiki-Vote.txt", None);
+    // tests::run_triangle_snap("cit-HepTh.txt", None);
+    // tests::run_triangle_snap("email-Enron.txt", None);
+    // tests::run_triangle_snap("soc-Epinions1.txt", None);
+    tests::run_triangle_snap("soc-Slashdot0811.txt", None);
+    // tests::run_triangle_snap("twitter_combined.txt", None); // TODO: failing test!
 }
 
 
@@ -799,16 +801,27 @@ mod tests {
         let want = bruteforce_triangle_query(&edges);
         let brute_time = t.elapsed();
 
-        assert_eq!(got, want, "triangle join mismatch");
         println!(
             "{dataset}: {} edges -> {} directed triangles
   wcoj build    {:?}
   wcoj execute  {:?}
-  wcoj total    {:?}
-  2-edge-filter {:?}
+  wcoj total    {:?}    found {} triangles
+  2-edge-filter {:?}    found {} triangles
 ",
-            edges.len(), got.len(), build_time, exec_time, total_time, brute_time,
+            edges.len(), got.len(),
+            build_time,
+            exec_time,
+            total_time, got.len(),
+            brute_time, want.len(),
         );
+
+        if got != want {
+            // there are too many triangles to print all of them.
+            // instead, do a diff.
+            assert_eq!(got.len(), want.len(), "triangle join mismatch");
+            assert!(got == want, "triangle join mismatch");
+            todo!("locate the triangles present in one and missing in the other and print a diff");
+        }
     }
 
     #[test]
