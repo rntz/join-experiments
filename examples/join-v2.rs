@@ -171,6 +171,7 @@ impl<'a> QueryPlan<'a> {
             levels_reverse: self.levels.iter().rev().cloned().collect(),
             prefix: Vec::with_capacity(self.levels.len()),
             children: Vec::new(),
+            saved: Vec::new(),
             callback: f,
         }.execute()
     }
@@ -182,45 +183,47 @@ struct QueryDfsState<'a, F> {
     levels_reverse: Vec<Vec<usize>>,
     prefix: Vec<Value>,      // partial solution: prefix[i] = value of ith variable.
     children: Vec<&'a Trie>, // scratch buffer used to avoid per-call allocation.
-    // stack: Vec<&'a Trie>,  // a stack of trie nodes, used to save & restore tries
-    // // Every time we enter a level, we push the trie nodes for that level on the stack.
-    // //
-    // // Eg. if we enter a level [0,2] and our stack is [s...]
-    // // we push plan.tries[0] and plan.tries[2] on the stack
-    // // so now our stack is [s..., plan.tries[0], plan.tries[2]].
+    // Trie node stack. When entering a level we push the current node of each
+    // trie in that level; on leaving we restore them.
+    saved: Vec<&'a Trie>,
 }
 
 impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
+    // The trie map at position `pos` of the current level, read from the `saved` stack
+    // (whose slice for this level begins at `mark`). Returns a `&'a` borrow of the map — tied
+    // to the trie data, not to `self` — so callers can keep mutating `self` while holding it.
+    // Panics if that trie has already bottomed out into a Leaf.
+    #[inline(always)]
+    fn level_map(&self, mark: usize, pos: usize) -> &'a HashMap<Value, Trie> {
+        match self.saved[mark + pos] {
+            Trie::Node(map) => map,
+            Trie::Leaf => unsafe { core::hint::unreachable_unchecked() },
+        }
+    }
+
     fn execute(&mut self) {
         assert!(!self.levels_reverse.is_empty());
         let level: Vec<usize> = self.levels_reverse.pop().unwrap();
-        // For each trie in this level, snapshot its current node so we can restore it
-        // when we're done.
-        //
-        // TODO: instead of allocating many small vectors here, add a stack Vec to
-        // QueryDfsState for saving this information (one big Vec) and push/pop it.
-        let level_tries: Vec<&Trie> = level.iter().map(|&trie_idx| self.tries[trie_idx]).collect();
-        // Get the trie maps for each trie we're using in this level.
-        // TODO: either avoid this allocation or put it into a mutable vec on QueryDfsState.
-        let level_maps: Vec<&HashMap<Value, Trie>> = level_tries.iter().copied()
-            .map(|trie| match trie {
-                Trie::Node(map) => map,
-                Trie::Leaf => panic!("trie ran out of levels too soon"),
-            }).collect();
-        // Which map has the smallest count?
-        let proposer_map_idx: usize = level_maps.iter()
-            .enumerate()
-            .min_by_key(|(map_idx, map)| map.len())
-            .unwrap()
-            .0;
+        // Snapshot the current node of each trie in this level onto the `saved` stack so we
+        // can restore them when we're done; `mark` is where this level's slice begins.
+        let mark = self.saved.len();
+        for &trie_idx in &level { self.saved.push(self.tries[trie_idx]); }
+        // The proposer is the trie in this level with the fewest children. We read each
+        // level trie's map straight off the `saved` stack (positions mark..mark+width)
+        // instead of materializing a Vec<&HashMap>.
+        let width = level.len();
+        let proposer_pos: usize = (0..width)
+            .min_by_key(|&pos| self.level_map(mark, pos).len())
+            .unwrap();
 
-        'keys: for (key, child) in level_maps[proposer_map_idx] {
+        let proposer_map = self.level_map(mark, proposer_pos);
+        'keys: for (key, child) in proposer_map {
             self.children.clear();
             // Look up this key in each trie at this level. If any trie lacks this key,
             // skip to the next key.
-            for (pos, &trie_idx) in level.iter().enumerate() {
-                if pos == proposer_map_idx { self.children.push(child); continue; }
-                match level_maps[pos].get(key) {
+            for pos in 0..width {
+                if pos == proposer_pos { self.children.push(child); continue; }
+                match self.level_map(mark, pos).get(key) {
                     Some(child) => self.children.push(child),
                     None => continue 'keys,
                 }
@@ -232,13 +235,16 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
             self.recur(*key)
         }
 
-        // Restore every trie in this level to the parent node the caller left it at.
+        // Restore every trie in this level to the parent node the caller left it at, then
+        // pop this level's slice off the `saved` stack.
         for (pos, &trie_idx) in level.iter().enumerate() {
-            self.tries[trie_idx] = level_tries[pos];
+            self.tries[trie_idx] = self.saved[mark + pos];
         }
+        self.saved.truncate(mark);
         self.levels_reverse.push(level);
     }
 
+    #[inline(always)]
     fn recur(&mut self, next: Value) {
         self.prefix.push(next);
         if self.levels_reverse.is_empty() {
