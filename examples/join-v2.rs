@@ -168,19 +168,19 @@ impl<'a> QueryPlan<'a> {
         // Execute via depth-first backtracking.
         QueryDfsState {
             tries: self.indexes.clone(),
-            levels_reverse: self.levels.iter().rev().cloned().collect(),
+            levels: &self.levels,
             prefix: Vec::with_capacity(self.levels.len()),
             children: Vec::new(),
             saved: Vec::new(),
             callback: f,
-        }.execute()
+        }.execute(0)
     }
 }
 
 struct QueryDfsState<'a, F> {
     callback: F,
     tries: Vec<&'a Trie>,       // the current node in each trie that we're investigating.
-    levels_reverse: Vec<Vec<usize>>,
+    levels: &'a Vec<Vec<usize>>,
     prefix: Vec<Value>,      // partial solution: prefix[i] = value of ith variable.
     children: Vec<&'a Trie>, // scratch buffer used to avoid per-call allocation.
     // Trie node stack. When entering a level we push the current node of each
@@ -189,28 +189,14 @@ struct QueryDfsState<'a, F> {
 }
 
 impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
-    // The trie map at position `pos` of the current level, read from the `saved` stack
-    // (whose slice for this level begins at `mark`). Returns a `&'a` borrow of the map — tied
-    // to the trie data, not to `self` — so callers can keep mutating `self` while holding it.
-    // Panics if that trie has already bottomed out into a Leaf.
-    #[inline(always)]
-    fn level_map(&self, mark: usize, pos: usize) -> &'a HashMap<Value, Trie> {
-        match self.saved[mark + pos] {
-            Trie::Node(map) => map,
-            Trie::Leaf => unsafe { core::hint::unreachable_unchecked() },
-        }
-    }
-
-    fn execute(&mut self) {
-        assert!(!self.levels_reverse.is_empty());
-        let level: Vec<usize> = self.levels_reverse.pop().unwrap();
+    fn execute(&mut self, level_idx: usize) {
+        let level: &Vec<usize> = &self.levels[level_idx];
         // Snapshot the current node of each trie in this level onto the `saved` stack so we
         // can restore them when we're done; `mark` is where this level's slice begins.
         let mark = self.saved.len();
-        for &trie_idx in &level { self.saved.push(self.tries[trie_idx]); }
+        for &trie_idx in level { self.saved.push(self.tries[trie_idx]); }
         // The proposer is the trie in this level with the fewest children. We read each
-        // level trie's map straight off the `saved` stack (positions mark..mark+width)
-        // instead of materializing a Vec<&HashMap>.
+        // level trie's map off the `saved` stack (positions mark..mark+width).
         let width = level.len();
         let proposer_pos: usize = (0..width)
             .min_by_key(|&pos| self.level_map(mark, pos).len())
@@ -232,7 +218,7 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
             for (pos, &trie_idx) in level.iter().enumerate() {
                 self.tries[trie_idx] = self.children[pos];
             }
-            self.recur(*key)
+            self.recur(*key, level_idx + 1)
         }
 
         // Restore every trie in this level to the parent node the caller left it at, then
@@ -241,16 +227,25 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
             self.tries[trie_idx] = self.saved[mark + pos];
         }
         self.saved.truncate(mark);
-        self.levels_reverse.push(level);
+    }
+
+    // Get the map for the trie at self.saved[mark + pos]. Must not be bottomed
+    // out at a Leaf!
+    #[inline(always)]
+    fn level_map(&self, mark: usize, pos: usize) -> &'a HashMap<Value, Trie> {
+        match self.saved[mark + pos] {
+            Trie::Node(map) => map,
+            Trie::Leaf => unsafe { core::hint::unreachable_unchecked() },
+        }
     }
 
     #[inline(always)]
-    fn recur(&mut self, next: Value) {
+    fn recur(&mut self, next: Value, level_idx: usize) {
         self.prefix.push(next);
-        if self.levels_reverse.is_empty() {
+        if level_idx == self.levels.len() {
             (self.callback)(self.prefix.as_slice());
         } else {
-            self.execute();
+            self.execute(level_idx);
         }
         let popped = self.prefix.pop();
         debug_assert!(popped == Some(next));
