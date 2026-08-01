@@ -180,7 +180,6 @@ struct QueryDfsState<'a, F> {
     tries: Vec<&'a Trie>,       // the current node in each trie that we're investigating.
     levels_reverse: Vec<Vec<usize>>,
     prefix: Vec<Value>,      // partial solution: prefix[i] = value of ith variable.
-    // scratch: Vec<&'a Trie>,  // a scratch vector of tries used when trying to find a match
     // stack: Vec<&'a Trie>,  // a stack of trie nodes, used to save & restore tries
     // // Every time we enter a level, we push the trie nodes for that level on the stack.
     // //
@@ -213,8 +212,11 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
             .unwrap()
             .0;
 
+        // TODO: allocate children once as a vector on QueryDfsState and mutate instead of
+        // allocating here.
+        let mut children = Vec::new();
         'keys: for (key, child) in level_maps[proposer_map_idx] {
-            let mut children = Vec::new();
+            children.clear();
             // Look up this key in each trie at this level. If any trie lacks this key,
             // skip to the next key.
             for (pos, &trie_idx) in level.iter().enumerate() {
@@ -558,7 +560,7 @@ mod tests {
     }
 
     fn normalize(mut v: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
-        v.sort();
+        v.sort_unstable();
         v
     }
 
