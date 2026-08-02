@@ -701,7 +701,7 @@ mod tests {
         let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
         let bwd = Trie::build(&db, "E", &vec![TrieLevel(1), TrieLevel(0)]).unwrap();
         let plan = QueryPlan {
-            indexes: vec![&fwd, &fwd, &bwd],
+            tries: vec![&fwd, &fwd, &bwd],
             levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
         };
         let got = run_plan(&plan);
@@ -774,7 +774,7 @@ mod tests {
 
         // levels: x <- entry0; y <- entry0 ∩ entry1; z <- entry1.
         let plan = QueryPlan {
-            indexes: vec![&fwd, &fwd],
+            tries: vec![&fwd, &fwd],
             levels: vec![vec![0], vec![0, 1], vec![1]],
         };
         let got = run_plan(&plan);
@@ -802,7 +802,7 @@ mod tests {
             vec![vec![0, 0], vec![1, 1], vec![2, 3], vec![4, 4], vec![5, 6]],
         );
         let diag = Trie::build(&db, "R", &vec![TrieLevel(0), EqColumn(0)]).unwrap();
-        let plan = QueryPlan { indexes: vec![&diag], levels: vec![vec![0]] };
+        let plan = QueryPlan { tries: vec![&diag], levels: vec![vec![0]] };
         let got = run_plan(&plan);
         assert_eq!(got, vec![vec![0], vec![1], vec![4]], "self-loop mismatch");
     }
@@ -822,7 +822,7 @@ mod tests {
         let db = edge_db(&edges);
         let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
         let plan = QueryPlan {
-            indexes: vec![&fwd, &fwd, &fwd],
+            tries: vec![&fwd, &fwd, &fwd],
             levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
         };
         let got = run_plan(&plan);
