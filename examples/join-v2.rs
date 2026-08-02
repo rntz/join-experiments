@@ -886,13 +886,10 @@ mod tests {
             brute_time, want.len(),
         );
 
-        if got != want {
-            // there are too many triangles to print all of them.
-            // instead, do a diff.
-            assert_eq!(got.len(), want.len(), "triangle join mismatch");
-            assert!(got == want, "triangle join mismatch");
-            todo!("locate the triangles present in one and missing in the other and print a diff");
-        }
+        // There are too many triangles to print on mismatch, so just compare counts first
+        // (a nicer message than a full set diff) and then the full sets.
+        assert_eq!(got.len(), want.len(), "triangle count mismatch");
+        assert!(got == want, "triangle set mismatch");
     }
 
     // ---- Test 6: undirected triangle count (matches SNAP's published figures). ----
