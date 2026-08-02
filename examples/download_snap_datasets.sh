@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# (Authored by Claude, reviewed/edited by Michael Arntzenius.)
+# (mostly Claude-generated, but I reviewed/edited it.)
 #
 # Downloads a set of SNAP (Stanford Large Network Dataset Collection) datasets,
 # un-gzips them, and places the resulting .txt files into ./data/
@@ -13,19 +13,20 @@ set -euo pipefail
 # to the script.
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-pwd
-
 BASE_URL="https://snap.stanford.edu/data"
 DATA_DIR="data"
 
+# NB. sorted in order of size. the larger ones take longer to download; comment
+# them out to skip.
 DATASETS=(
-    "ca-GrQc"
-    "cit-HepTh"
-    "wiki-Vote"
-    "email-Enron"
-    "soc-Epinions1"
-    "soc-Slashdot0811"
-    "twitter_combined"
+    "ca-GrQc"                   # ~  30k edges
+    "wiki-Vote"                 # ~ 100k
+    "cit-HepTh"                 # ~ 350k
+    "email-Enron"               # ~ 370k
+    "soc-Epinions1"             # ~ 500k
+    "soc-Slashdot0811"          # ~ 900k
+    "twitter_combined"          # ~2400k
+    "soc-LiveJournal1"          # ~6900k
 )
 
 mkdir -p "$DATA_DIR"
