@@ -399,7 +399,7 @@ impl<'a> QueryPlan<'a> {
         QueryDfsState {
             tries: self.tries.iter().map(|&t| match t {
                 Trie::Node(map) => map,
-                Trie::Leaf => unreachable!(),
+                Trie::Leaf => unreachable!(), // FIXME XXX BUG! this fires for a depth-0 trie!
             }).collect(),
             levels: &self.levels,
             prefix: Vec::with_capacity(self.levels.len()),
