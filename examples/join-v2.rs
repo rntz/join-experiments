@@ -537,13 +537,21 @@ impl Trie {
 
 // ---------- BENCHMARKS ----------
 fn main() {
-    // tests::run_triangle_snap("ca-GrQc.txt", None);
-    // tests::run_triangle_snap("wiki-Vote.txt", None);
-    // tests::run_triangle_snap("cit-HepTh.txt", None);
-    // tests::run_triangle_snap("email-Enron.txt", None);
-    // tests::run_triangle_snap("soc-Epinions1.txt", None);
-    tests::run_triangle_snap("soc-Slashdot0811.txt", None);
-    // tests::run_triangle_snap("twitter_combined.txt", None); // TODO: failing test!
+    // tests::snap_triangles_undirected("ca-GrQc.txt", None);
+    // tests::snap_triangles_undirected("wiki-Vote.txt", None);
+    // tests::snap_triangles_undirected("cit-HepTh.txt", None);
+    // tests::snap_triangles_undirected("email-Enron.txt", None);
+    // tests::snap_triangles_undirected("soc-Epinions1.txt", None);
+    // tests::snap_triangles_undirected("soc-Slashdot0811.txt", None);
+    tests::snap_triangles_undirected("twitter_combined.txt", None);
+
+    // tests::snap_triangles_directed("ca-GrQc.txt", None);
+    // tests::snap_triangles_directed("wiki-Vote.txt", None);
+    // tests::snap_triangles_directed("cit-HepTh.txt", None);
+    // tests::snap_triangles_directed("email-Enron.txt", None);
+    // tests::snap_triangles_directed("soc-Epinions1.txt", None);
+    // tests::snap_triangles_directed("soc-Slashdot0811.txt", None);
+    tests::snap_triangles_directed("twitter_combined.txt", None); // TODO: failing test!
 }
 
 
@@ -623,6 +631,12 @@ mod tests {
         v
     }
 
+    // Build a Database with a single binary relation "E" from an edge list.
+    fn edge_db(edges: &[(Value, Value)]) -> VecDb {
+        let rows: Vec<Vec<Value>> = edges.iter().map(|&(a, b)| vec![a, b]).collect();
+        VecDb::new().rel("E", 2, rows)
+    }
+
     // ---- Test 1: Trie::build across all IndexColumnShape kinds. ----
     //
     // Exercises: multi-level tries, a non-identity permutation shape, the
@@ -693,11 +707,10 @@ mod tests {
         assert_eq!(got, want, "triangle join mismatch");
     }
 
-    // The triangle query E(x,y) E(y,z) E(z,x) by brute force: all (x,y,z) with x->y, y->z,
-    // z->x, in sorted order. Iterate out-neighbours of y (rather than all edges) so this
-    // stays near-linear in the number of 2-paths. Used to cross-check the WCOJ plan, both in
-    // the unit test above and in the SNAP benchmark below.
-    fn bruteforce_triangle_query(edges: &[(Value, Value)]) -> Vec<Vec<Value>> {
+    // The directed triangle query E(x,y) E(y,z) E(z,x), via a binary join for E(x,y) E(y,z)
+    // followed by a hash-filter on E(z,x), then sorted. Used to cross-check the WCOJ plan,
+    // both in the unit test above and in the SNAP benchmark below.
+    fn binary_triangles_directed(edges: &[(Value, Value)]) -> Vec<Vec<Value>> {
         let edge_set: FxHashSet<(Value, Value)> = edges.iter().copied().collect();
         let mut out: FxHashMap<Value, Vec<Value>> = FxHashMap::default();
         for &(a, b) in edges { out.entry(a).or_default().push(b); }
@@ -706,6 +719,37 @@ mod tests {
             if let Some(zs) = out.get(&y) {
                 for &z in zs {
                     if edge_set.contains(&(z, x)) { want.push(vec![x, y, z]); }
+                }
+            }
+        }
+        normalize(want)
+    }
+
+    // Normalize an edge list into an undirected simple graph oriented low -> high: reorient
+    // every edge so src < dst, drop self-loops, then sort & dedup. In the result every edge
+    // (a, b) has a < b, so an undirected triangle {a < b < c} appears uniquely as the three
+    // edges a->b, b->c, a->c — which is what lets the query below count each triangle once.
+    fn to_low_high(edges: &[(Value, Value)]) -> Vec<(Value, Value)> {
+        let mut v: Vec<(Value, Value)> = edges.iter()
+            .filter(|&&(a, b)| a != b)
+            .map(|&(a, b)| if a < b { (a, b) } else { (b, a) })
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    // Finds undirected triangles over a low->high edge list: all {a < b < c} with edges
+    // a->b, b->c, a->c. Uses a binary join; sorts results.
+    fn binary_triangles_undirected(edges: &[(Value, Value)]) -> Vec<Vec<Value>> {
+        let edge_set: FxHashSet<(Value, Value)> = edges.iter().copied().collect();
+        let mut out: FxHashMap<Value, Vec<Value>> = FxHashMap::default();
+        for &(a, b) in edges { out.entry(a).or_default().push(b); }
+        let mut want: Vec<Vec<Value>> = Vec::new();
+        for &(a, b) in edges {
+            if let Some(cs) = out.get(&b) {
+                for &c in cs {
+                    if edge_set.contains(&(a, c)) { want.push(vec![a, b, c]); }
                 }
             }
         }
@@ -759,10 +803,31 @@ mod tests {
         assert_eq!(got, vec![vec![0], vec![1], vec![4]], "self-loop mismatch");
     }
 
-    // Build a Database with a single binary relation "E" from an edge list.
-    fn edge_db(edges: &[(Value, Value)]) -> VecDb {
-        let rows: Vec<Vec<Value>> = edges.iter().map(|&(a, b)| vec![a, b]).collect();
-        VecDb::new().rel("E", 2, rows)
+    #[test]
+    fn test_triangle_snap() { snap_triangles_directed("ca-GrQc.txt", Some(3_000)); }
+
+    #[test]
+    fn test_undirected_triangle_query() {
+        // Raw edges with mixed orientation, a self-loop, and a duplicate — all normalized away.
+        let raw: Vec<(Value, Value)> = vec![
+            (1, 0), (1, 2), (2, 0),   // triangle {0,1,2}
+            (0, 3), (3, 4), (4, 0),   // triangle {0,3,4}
+            (2, 2),                   // self-loop -> dropped
+            (0, 1),                   // duplicate of (1,0) after reorientation
+        ];
+        let edges = to_low_high(&raw);
+        assert_eq!(edges, vec![(0,1),(0,2),(0,3),(0,4),(1,2),(3,4)]);
+
+        let db = edge_db(&edges);
+        let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
+        let plan = QueryPlan {
+            indexes: vec![&fwd, &fwd, &fwd],
+            levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
+        };
+        let got = run_plan(&plan);
+        let want = binary_triangles_undirected(&edges);
+        assert_eq!(got, want, "undirected join vs brute force");
+        assert_eq!(got, vec![vec![0, 1, 2], vec![0, 3, 4]], "expected exactly two triangles");
     }
 
     // ---- Test 5: triangle query on a real SNAP dataset. ----
@@ -772,7 +837,7 @@ mod tests {
     // the file we read so we can start small and scale up; None means "the whole file".
     // The crate directory is resolved at compile time, so it works regardless of the
     // working directory; if the file is missing the test is skipped, not failed.
-    pub fn run_triangle_snap(dataset: &str, max_edges: Option<usize>) {
+    pub fn snap_triangles_directed(dataset: &str, max_edges: Option<usize>) {
         use std::fs::File;
         let path = format!("{}/examples/data/{dataset}", env!("CARGO_MANIFEST_DIR"));
         let file = File::open(&path).expect("could not open data file");
@@ -798,7 +863,7 @@ mod tests {
         let total_time = wcoj_start.elapsed();
 
         let t = Instant::now();
-        let want = bruteforce_triangle_query(&edges);
+        let want = binary_triangles_directed(&edges);
         let brute_time = t.elapsed();
 
         println!(
@@ -824,6 +889,51 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_triangle_snap() { run_triangle_snap("ca-GrQc.txt", Some(3_000)); }
+    // ---- Test 6: undirected triangle count (matches SNAP's published figures). ----
+    //
+    // Reorient edges low->high and dedup, so each undirected triangle {a<b<c} shows up as
+    // a->b, b->c, a->c exactly once. The query is therefore E(x,y) E(y,z) E(x,z) (note the
+    // last atom, vs E(z,x) for directed 3-cycles), order x,y,z.
+    pub fn snap_triangles_undirected(dataset: &str, max_edges: Option<usize>) {
+        use std::fs::File;
+        let path = format!("{}/examples/data/{dataset}", env!("CARGO_MANIFEST_DIR"));
+        let file = File::open(&path).expect("could not open data file");
+        let raw = load_edges_from(file, max_edges);
+        let edges = to_low_high(&raw);
+        let db = edge_db(&edges);
+
+        let wcoj_start = Instant::now();
+        let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
+        let build_time = wcoj_start.elapsed();
+
+        let plan = QueryPlan {
+            indexes: vec![&fwd, &fwd, &fwd],
+            levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
+        };
+        let t = Instant::now();
+        let got = run_plan(&plan);
+        let exec_time = t.elapsed();
+        let total_time = wcoj_start.elapsed();
+
+        let t = Instant::now();
+        let want = binary_triangles_undirected(&edges);
+        let brute_time = t.elapsed();
+
+        println!(
+            "{dataset}: {} undirected edges -> {} triangles
+  wcoj build    {:?}
+  wcoj execute  {:?}
+  wcoj total    {:?}    found {} triangles
+  2-edge-filter {:?}    found {} triangles
+",
+            edges.len(), got.len(),
+            build_time,
+            exec_time,
+            total_time, got.len(),
+            brute_time, want.len(),
+        );
+
+        assert_eq!(got.len(), want.len(), "undirected triangle count mismatch");
+        assert!(got == want, "undirected triangle set mismatch");
+    }
 }
