@@ -408,6 +408,122 @@ impl<'a> QueryPlan<'a> {
             callback: f,
         }.execute(0)
     }
+
+    // ======================================================================
+    // BELOW IS CLAUDE-GENERATED CODE THAT I HAVE NOT REVIEWED YET - MICHAEL
+    // ======================================================================
+    //
+    // Execute breadth-first, à la Frank McSherry's DataToad (see the "COMPUTATIONAL ATOMS"
+    // aside above). Instead of backtracking one variable at a time, we maintain a *frontier*
+    // of partial solutions for the first k variables and extend the whole frontier to k+1
+    // variables at each step. This is the same proposer/intersect logic as execute_dfs, just
+    // scheduled level-by-level over all partial solutions rather than depth-first over one.
+    //
+    // The frontier is stored columnar (row-major flat vectors) to avoid a heap allocation
+    // per partial solution:
+    //  - `prefixes`: `depth` values per solution, where depth = # variables assigned so far.
+    //  - `nodes`: `n_atoms` trie-node pointers per solution (each atom's current trie node).
+    // So partial solution `row` owns prefixes[row*depth .. (row+1)*depth] and
+    // nodes[row*n_atoms .. (row+1)*n_atoms].
+    fn execute_bfs<F>(&self, mut f: F) where F: FnMut(&[Value]) {
+        let n_vars = self.levels.len();
+        if n_vars == 0 { // mirror execute_dfs's empty-query case.
+            f(&[]);
+            return;
+        }
+        let n_atoms = self.tries.len();
+
+        // Initial frontier: a single partial solution with an empty prefix and every atom
+        // sitting at its root node.
+        let mut prefixes: Vec<Value> = Vec::new();
+        let mut nodes: Vec<&TrieMap> = self.tries.iter().map(|&t| match t {
+            Trie::Node(map) => map,
+            Trie::Leaf => unreachable!(),
+        }).collect();
+
+        // Reused scratch: children at the current level, and the emitted-row buffer.
+        let mut children: Vec<&Trie> = Vec::new();
+        let mut out: Vec<Value> = Vec::with_capacity(n_vars);
+
+        for (level_idx, level) in self.levels.iter().enumerate() {
+            let depth = level_idx;                // prefix length of the current frontier
+            let count = nodes.len() / n_atoms;    // # partial solutions in the frontier
+            let width = level.len();
+            let last = level_idx + 1 == n_vars;
+
+            // The next frontier we're building (unused on the last level, where we emit).
+            let mut next_prefixes: Vec<Value> = Vec::new();
+            let mut next_nodes: Vec<&TrieMap> = Vec::new();
+
+            // ---------- MICHAEL NOTES ----------
+            //
+            // I don't think this is actually similar to datatoad's approach. It hasn't
+            // separated the count/propose step from the filter step. This means that
+            // instead of each filter going to town over a huge slice of data, it only
+            // chews on the results of a single proposer.
+            //
+            // Maybe download Frank's blog post, point Claude at it, and ask it to
+            // redesign?
+            //
+            // Might be worth it just to see whether this actually improves performance!
+            // Although, in Frank's case, it might mostly be about minimizing dynamic
+            // dispatch; there is dispatch in this code but it's from a very small # of
+            // options.
+            //
+            // Also, I might not see any perf improvements unless I can get Rust to
+            // vectorize the filter kernels. I should probably do some isolated
+            // vectorization experiments to see how hard it is to do this and what kind of
+            // speedups I can get.
+            //
+            // ---------- END MICHAEL NOTES ----------
+            for row in 0..count {
+                let pfx = &prefixes[row * depth..row * depth + depth];
+                let row_nodes = &nodes[row * n_atoms..row * n_atoms + n_atoms];
+
+                // The proposer is the atom in this level with the fewest children.
+                let proposer_pos = (0..width)
+                    .min_by_key(|&pos| row_nodes[level[pos]].len())
+                    .unwrap();
+                let proposer_map = row_nodes[level[proposer_pos]];
+
+                'keys: for (key, child) in proposer_map {
+                    // Intersect: look up this key in every other trie at this level.
+                    children.clear();
+                    for pos in 0..width {
+                        if pos == proposer_pos { children.push(child); continue; }
+                        match row_nodes[level[pos]].get(key) {
+                            Some(c) => children.push(c),
+                            None => continue 'keys,
+                        }
+                    }
+
+                    // A match. On the last variable, emit; otherwise extend the frontier.
+                    if last {
+                        out.clear();
+                        out.extend_from_slice(pfx);
+                        out.push(*key);
+                        f(&out);
+                    } else {
+                        next_prefixes.extend_from_slice(pfx);
+                        next_prefixes.push(*key);
+                        // Copy this solution's nodes, then descend the atoms in this level to
+                        // their child under `key`. A Leaf child bottoms out and is never read.
+                        let base = next_nodes.len();
+                        next_nodes.extend_from_slice(row_nodes);
+                        for (pos, &trie_idx) in level.iter().enumerate() {
+                            if let Trie::Node(map) = children[pos] { next_nodes[base + trie_idx] = map; }
+                        }
+                    }
+                }
+            }
+
+            prefixes = next_prefixes;
+            nodes = next_nodes;
+        }
+    }
+    // ======================================================================
+    // END UNREVIEWED LLM GENERATED CODE
+    // ======================================================================
 }
 
 struct QueryDfsState<'a, F> {
@@ -630,6 +746,14 @@ mod tests {
         normalize(out)
     }
 
+    // Like run_plan, but executes breadth-first. Kept separate so the SNAP benchmark can
+    // time DFS and BFS on the same plan and compare.
+    fn run_plan_bfs(plan: &QueryPlan) -> Vec<Vec<Value>> {
+        let mut out: Vec<Vec<Value>> = Vec::new();
+        plan.execute_bfs(|row| out.push(row.to_vec()));
+        normalize(out)
+    }
+
     fn normalize(mut v: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
         v.sort_unstable();
         v
@@ -831,6 +955,51 @@ mod tests {
         assert_eq!(got, vec![vec![0, 1, 2], vec![0, 3, 4]], "expected exactly two triangles");
     }
 
+    // ---- Test 7: execute_bfs matches execute_dfs. ----
+    //
+    // The breadth-first executor should compute exactly the same result set as the
+    // depth-first one on every plan. Cross-check on the triangle query (shared + swapped
+    // tries), the path query (a trie shared across two levels), the self-loop query
+    // (a depth-1 EqColumn trie), and the empty-query edge case.
+    #[test]
+    fn test_bfs_matches_dfs() {
+        // Directed-triangle setup from test 2.
+        let edges: Vec<(Value, Value)> = vec![
+            (0, 1), (1, 2), (2, 0), (0, 2), (2, 1), (1, 0), (1, 3), (3, 1),
+        ];
+        let db = edge_db(&edges);
+        let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
+        let bwd = Trie::build(&db, "E", &vec![TrieLevel(1), TrieLevel(0)]).unwrap();
+        let tri = QueryPlan {
+            tries: vec![&fwd, &fwd, &bwd],
+            levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
+        };
+
+        // Path query from test 3 (a single trie shared across two levels).
+        let pedges: Vec<(Value, Value)> = vec![(0, 1), (1, 2), (1, 3), (2, 3), (3, 0)];
+        let pdb = edge_db(&pedges);
+        let pfwd = Trie::build(&pdb, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
+        let path = QueryPlan { tries: vec![&pfwd, &pfwd], levels: vec![vec![0], vec![0, 1], vec![1]] };
+
+        // Self-loop query from test 4 (a depth-1 EqColumn trie).
+        let sdb = VecDb::new().rel(
+            "R", 2, vec![vec![0, 0], vec![1, 1], vec![2, 3], vec![4, 4], vec![5, 6]],
+        );
+        let diag = Trie::build(&sdb, "R", &vec![TrieLevel(0), EqColumn(0)]).unwrap();
+        let loop_ = QueryPlan { tries: vec![&diag], levels: vec![vec![0]] };
+
+        // Empty query (no variables): both should yield exactly one empty tuple.
+        let empty = QueryPlan { tries: vec![], levels: vec![] };
+
+        for plan in [&tri, &path, &loop_, &empty] {
+            let mut dfs: Vec<Vec<Value>> = Vec::new();
+            plan.execute_dfs(|row| dfs.push(row.to_vec()));
+            let mut bfs: Vec<Vec<Value>> = Vec::new();
+            plan.execute_bfs(|row| bfs.push(row.to_vec()));
+            assert_eq!(normalize(dfs), normalize(bfs), "bfs and dfs disagree");
+        }
+    }
+
     fn snap_load(dataset: &str, max_edges: Option<usize>) -> Vec<(usize, usize)> {
         use std::fs::File;
         let path = format!("{}/data/{dataset}", env!("CARGO_MANIFEST_DIR"));
@@ -915,6 +1084,11 @@ mod tests {
         let exec_time = t.elapsed();
         let total_time = wcoj_start.elapsed();
 
+        // Same plan, breadth-first, so we can compare the two execution strategies.
+        let t = Instant::now();
+        let got_bfs = run_plan_bfs(&plan);
+        let bfs_time = t.elapsed();
+
         let t = Instant::now();
         let want = binary_triangles_undirected(&edges);
         let brute_time = t.elapsed();
@@ -922,18 +1096,21 @@ mod tests {
         println!(
             "{dataset}: {} undirected edges -> {} triangles
   wcoj build    {:>9.2?}
-  wcoj execute  {:>9.2?}
-  wcoj total    {:>9.2?}    found {:8} triangles
+  wcoj exec dfs {:>9.2?}    found {:8} triangles
+  wcoj exec bfs {:>9.2?}    found {:8} triangles
+  wcoj total    {:>9.2?}    (build + dfs)
   2-edge-filter {:>9.2?}    found {:8} triangles
 ",
             edges.len(), got.len(),
             build_time,
-            exec_time,
-            total_time, got.len(),
+            exec_time, got.len(),
+            bfs_time, got_bfs.len(),
+            total_time,
             brute_time, want.len(),
         );
 
         assert_eq!(got.len(), want.len(), "undirected triangle count mismatch");
         assert!(got == want, "undirected triangle set mismatch");
+        assert!(got == got_bfs, "bfs vs dfs triangle set mismatch");
     }
 }
