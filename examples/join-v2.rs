@@ -805,7 +805,7 @@ mod tests {
 
     fn snap_load(dataset: &str, max_edges: Option<usize>) -> Vec<(usize, usize)> {
         use std::fs::File;
-        let path = format!("{}/examples/data/{dataset}", env!("CARGO_MANIFEST_DIR"));
+        let path = format!("{}/data/{dataset}", env!("CARGO_MANIFEST_DIR"));
         let file = File::open(&path).expect("could not open data file");
         println!("{dataset}: loading from {path}");
         // load_edges_from already sorts.
@@ -814,11 +814,11 @@ mod tests {
 
     // ---- Test 5: triangle query on a real SNAP dataset. ----
     //
-    // Loads (a prefix of) the named dataset from examples/data/ and runs the same triangle
-    // query as test 2, cross-checked against brute force. `max_edges` caps how much of
-    // the file we read so we can start small and scale up; None means "the whole file".
-    // The crate directory is resolved at compile time, so it works regardless of the
-    // working directory; if the file is missing the test is skipped, not failed.
+    // Loads (a prefix of) the named dataset from data/ and runs the same triangle query
+    // as test 2, cross-checked against brute force. `max_edges` caps how much of the file
+    // we read so we can start small and scale up; None means "the whole file". The crate
+    // directory is resolved at compile time, so it works regardless of the working
+    // directory; if the file is missing the test is skipped, not failed.
     pub fn snap_triangles_directed(dataset: &str, max_edges: Option<usize>) {
         let edges = snap_load(dataset, max_edges);
         let db = edge_db(&edges);
