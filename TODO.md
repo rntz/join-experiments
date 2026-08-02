@@ -14,9 +14,6 @@ Use `--release` or else it will be slow.
 
 # TODOs
 
-- move FxHash up to the top of the file, separate from other things. name types
-  so that it's a one-line change to switch from default (SipHash) to FxHash.
-
 - implement 4-clique (K4) benchmark, should show a more significant speedup than
   triangles compared with non-WCO join. Claude suggests comparing against a
   2-step binary join plan: find triangles, then extend to 4-cliques.
