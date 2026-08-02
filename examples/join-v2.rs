@@ -252,14 +252,8 @@ impl Trie {
     // Trie::build() returns None if the trie is empty. This is necessary to distinguish
     // between Some(Trie::Leaf()), a trie containing an single empty tuple, and None, an
     // empty trie.
-    //
-    // TODO: Trie::build() may be slow due to the interpretative overhead of examining
-    // filters and level_to_col in the inner loop. Measure this and redesign if too slow.
-    // Instead of one loop interpreting these for each row each filter could become its
-    // own loop, and level_to_col a final loop (or maybe there's some way to pipeline even
-    // further?).
     fn build<Db: Database>(db: &Db, rel: Db::RelId, shape: &IndexShape) -> Option<Trie> {
-        // Preprocess `shape` once, outside the row loop:
+        // Preprocess `shape` into:
         //  - `level_to_col[k]` is the column that becomes trie level k.
         //  - `filters` are the columns carrying EqConst/EqColumn checks.
         let n_levels = shape.iter().filter(|c| matches!(c, IndexColumnShape::TrieLevel(_))).count();
@@ -295,6 +289,9 @@ impl Trie {
         // Node; we only need to know whether any row survived the filters.
         let mut any_row = false;
 
+        // This interprets filters & level_to_col in the inner loop. Seems to perform well
+        // enough on simple benchmarks. If it becomes a problem, redesign to lift as much
+        // interpretation as possible out of the loop and see if that fixes it.
         for row in db.rows(rel) {
             debug_assert!(row.len() == arity, "row arity {} != shape arity {arity}", row.len());
 

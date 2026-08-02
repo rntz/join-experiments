@@ -24,7 +24,7 @@ Use `--release` or else it will be slow.
 - maybe: debug perf of execute_dfs() using callgrind?
   would need to run it on Sully's AMD box.
 
-- compare performance of undirected triangle search to dijkstralog!
+- compare performance of undirected triangle search to dijkstralog.
 
 - query planning: derive which trie indexes to build from a query + variable
   order and bundle them into a struct. Right now callers hand-build each index
