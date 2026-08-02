@@ -6,19 +6,72 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::Hash;
 
-const DEBUG: bool = true;
-// Debug-print vectors of length <= PRINTMAX.
-const PRINTMAX: usize = 40;
-
 macro_rules! print_flush {
     ($($e:tt)*) => { { print!($($e)*); std::io::stdout().flush().unwrap() } }
 }
 
-fn clone_with_capacity<A: Clone>(n: usize, src: &Vec<A>) -> Vec<A> { // TODO: eliminate if unused
-    debug_assert!(n >= src.len());
-    let mut r = Vec::with_capacity(n);
-    r.extend_from_slice(src);
-    return r;
+
+// ---------- HASHER SELECTION ----------
+//
+// Hash algorithm impacts join performance heavily (factor of ~3x). Rust's default is slow
+// in exchange for extra security against adversarial attacks. We probably don't need
+// this? So we use a much simpler, faster hash, FxHash. Would be fine to replace this with
+// a library, presumably there's some crate in the Rust ecosystem for this.
+//
+// Pick your hash algorithm by changing "type HashBuilder":
+type HashBuilder = FxBuildHasher; // fast, non-cryptographic hash
+// type HashBuilder = std::collections::hash_map::RandomState; // stdlib SipHash
+
+type Map<K, V> = HashMap<K, V, HashBuilder>;
+type Set<K> = HashSet<K, HashBuilder>;
+
+// An implementation of FxHash (Claude-generated).
+const FX_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+const FX_ROTATE: u32 = 5;
+
+#[derive(Default)]
+struct FxHasher { hash: u64 }
+
+impl FxHasher {
+    #[inline]
+    fn add(&mut self, i: u64) {
+        self.hash = (self.hash.rotate_left(FX_ROTATE) ^ i).wrapping_mul(FX_SEED);
+    }
+}
+
+impl std::hash::Hasher for FxHasher {
+    #[inline]
+    fn finish(&self) -> u64 { self.hash }
+    #[inline]
+    fn write_usize(&mut self, i: usize) { self.add(i as u64); }
+    #[inline]
+    fn write_u64(&mut self, i: u64) { self.add(i); }
+    #[inline]
+    fn write_u32(&mut self, i: u32) { self.add(i as u64); }
+    #[inline]
+    fn write_u8(&mut self, i: u8) { self.add(i as u64); }
+    #[inline]
+    fn write(&mut self, mut bytes: &[u8]) {
+        while bytes.len() >= 8 {
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(&bytes[..8]);
+            self.add(u64::from_le_bytes(buf));
+            bytes = &bytes[8..];
+        }
+        if !bytes.is_empty() {
+            let mut buf = [0u8; 8];
+            buf[..bytes.len()].copy_from_slice(bytes);
+            self.add(u64::from_le_bytes(buf));
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+struct FxBuildHasher;
+impl std::hash::BuildHasher for FxBuildHasher {
+    type Hasher = FxHasher;
+    #[inline]
+    fn build_hasher(&self) -> FxHasher { FxHasher::default() }
 }
 
 
@@ -264,61 +317,7 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
 
 // ---------- TRIE INDEXES ----------
 
-// A dependency-free FxHash (à la rustc-hash): a fast, non-cryptographic hasher. The default
-// HashMap uses SipHash, which is overkill for our interned integer keys; the whole join is
-// `.get(key)` probes, so hash *compute* is a real slice of runtime. Our keys are `Value`
-// (= usize), so in practice only the `write_usize` fast path is exercised.
-const FX_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-const FX_ROTATE: u32 = 5;
-
-#[derive(Default)]
-struct FxHasher { hash: u64 }
-
-impl FxHasher {
-    #[inline]
-    fn add(&mut self, i: u64) {
-        self.hash = (self.hash.rotate_left(FX_ROTATE) ^ i).wrapping_mul(FX_SEED);
-    }
-}
-
-impl std::hash::Hasher for FxHasher {
-    #[inline]
-    fn finish(&self) -> u64 { self.hash }
-    #[inline]
-    fn write_usize(&mut self, i: usize) { self.add(i as u64); }
-    #[inline]
-    fn write_u64(&mut self, i: u64) { self.add(i); }
-    #[inline]
-    fn write_u32(&mut self, i: u32) { self.add(i as u64); }
-    #[inline]
-    fn write_u8(&mut self, i: u8) { self.add(i as u64); }
-    #[inline]
-    fn write(&mut self, mut bytes: &[u8]) {
-        while bytes.len() >= 8 {
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(&bytes[..8]);
-            self.add(u64::from_le_bytes(buf));
-            bytes = &bytes[8..];
-        }
-        if !bytes.is_empty() {
-            let mut buf = [0u8; 8];
-            buf[..bytes.len()].copy_from_slice(bytes);
-            self.add(u64::from_le_bytes(buf));
-        }
-    }
-}
-
-#[derive(Default, Clone)]
-struct FxBuildHasher;
-impl std::hash::BuildHasher for FxBuildHasher {
-    type Hasher = FxHasher;
-    #[inline]
-    fn build_hasher(&self) -> FxHasher { FxHasher::default() }
-}
-
-type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
-type FxHashSet<K> = HashSet<K, FxBuildHasher>;
-type TrieMap = FxHashMap<Value, Trie>;
+type TrieMap = Map<Value, Trie>;
 
 enum Trie {
     Leaf,
@@ -697,8 +696,8 @@ mod tests {
     // followed by a hash-filter on E(z,x), then sorted. Used to cross-check the WCOJ plan,
     // both in the unit test above and in the SNAP benchmark below.
     fn binary_triangles_directed(edges: &[(Value, Value)]) -> Vec<Vec<Value>> {
-        let edge_set: FxHashSet<(Value, Value)> = edges.iter().copied().collect();
-        let mut out: FxHashMap<Value, Vec<Value>> = FxHashMap::default();
+        let edge_set: Set<(Value, Value)> = edges.iter().copied().collect();
+        let mut out: Map<Value, Vec<Value>> = Map::default();
         for &(a, b) in edges { out.entry(a).or_default().push(b); }
         let mut want: Vec<Vec<Value>> = Vec::new();
         for &(x, y) in edges {
@@ -728,8 +727,8 @@ mod tests {
     // Finds undirected triangles over a low->high edge list: all {a < b < c} with edges
     // a->b, b->c, a->c. Uses a binary join; sorts results.
     fn binary_triangles_undirected(edges: &[(Value, Value)]) -> Vec<Vec<Value>> {
-        let edge_set: FxHashSet<(Value, Value)> = edges.iter().copied().collect();
-        let mut out: FxHashMap<Value, Vec<Value>> = FxHashMap::default();
+        let edge_set: Set<(Value, Value)> = edges.iter().copied().collect();
+        let mut out: Map<Value, Vec<Value>> = Map::default();
         for &(a, b) in edges { out.entry(a).or_default().push(b); }
         let mut want: Vec<Vec<Value>> = Vec::new();
         for &(a, b) in edges {
