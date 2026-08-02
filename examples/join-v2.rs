@@ -504,21 +504,23 @@ impl Trie {
 
 // ---------- BENCHMARKS ----------
 fn main() {
-    // tests::snap_triangles_undirected("ca-GrQc.txt", None);
-    // tests::snap_triangles_undirected("wiki-Vote.txt", None);
-    // tests::snap_triangles_undirected("cit-HepTh.txt", None);
-    // tests::snap_triangles_undirected("email-Enron.txt", None);
-    // tests::snap_triangles_undirected("soc-Epinions1.txt", None);
-    // tests::snap_triangles_undirected("soc-Slashdot0811.txt", None);
-    tests::snap_triangles_undirected("twitter_combined.txt", None);
+    tests::snap_triangles_undirected("ca-GrQc.txt", None);
+    tests::snap_triangles_undirected("wiki-Vote.txt", None);
+    tests::snap_triangles_undirected("cit-HepTh.txt", None);
+    tests::snap_triangles_undirected("email-Enron.txt", None);
+    tests::snap_triangles_undirected("soc-Epinions1.txt", None);
+    tests::snap_triangles_undirected("soc-Slashdot0811.txt", None);
+    // // These are real slow:
+    // tests::snap_triangles_undirected("twitter_combined.txt", None);
+    // tests::snap_triangles_undirected("soc-LiveJournal1.txt", None);
 
-    // tests::snap_triangles_directed("ca-GrQc.txt", None);
-    // tests::snap_triangles_directed("wiki-Vote.txt", None);
-    // tests::snap_triangles_directed("cit-HepTh.txt", None);
-    // tests::snap_triangles_directed("email-Enron.txt", None);
-    // tests::snap_triangles_directed("soc-Epinions1.txt", None);
+    tests::snap_triangles_directed("ca-GrQc.txt", None);
+    tests::snap_triangles_directed("wiki-Vote.txt", None);
+    tests::snap_triangles_directed("cit-HepTh.txt", None);
+    tests::snap_triangles_directed("email-Enron.txt", None);
+    tests::snap_triangles_directed("soc-Epinions1.txt", None);
     // tests::snap_triangles_directed("soc-Slashdot0811.txt", None);
-    tests::snap_triangles_directed("twitter_combined.txt", None); // TODO: failing test!
+    // tests::snap_triangles_directed("twitter_combined.txt", None); // TODO: failing test!
 }
 
 
