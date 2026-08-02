@@ -677,7 +677,7 @@ mod tests {
             levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
         };
         let got = run_plan(&plan);
-        let want = bruteforce_triangle_query(&edges);
+        let want = binary_triangles_directed(&edges);
 
         assert!(!want.is_empty(), "test data should contain triangles");
         assert_eq!(got, want, "triangle join mismatch");
