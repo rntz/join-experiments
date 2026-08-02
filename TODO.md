@@ -37,7 +37,3 @@ Use `--release` or else it will be slow.
 - constants in atoms: decide how to represent constant arguments in Atom (e.g.
   R(x,2)). Trie::build already supports EqConst shapes; this is about the
   query-level representation.
-
-- Trie::build perf: the row loop reinterprets filters and level_to_col per row.
-  Measure the interpretive overhead; if it's significant, split into per-filter
-  loops / a final level_to_col loop, or pipeline further.
