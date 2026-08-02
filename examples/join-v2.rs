@@ -354,8 +354,10 @@ impl Trie {
 
 // ---------- WCOJ QUERY PLANS ----------
 struct QueryPlan<'a> {
-    tries: Vec<&'a Trie>,     // one trie per atom
-    levels: Vec<Vec<usize>>,    // one level per variable
+    // TODO: rewrite to Vec<Option<&'a Trie>> because indexes can be empty. in this case
+    // there are no query results; we should handle this in QueryPlan::execute_dfs().
+    tries: Vec<&'a Trie>, // one trie per atom.
+    levels: Vec<Vec<usize>>,      // one level per variable
     // Some of the trie pointers may be identical if atoms share indexes.
 }
 
@@ -388,10 +390,17 @@ struct QueryPlan<'a> {
 //     }
 
 impl<'a> QueryPlan<'a> {
-    fn execute_dfs<F>(&self, f: F) where F: FnMut(&[Value]) {
-        // Execute via depth-first backtracking.
+    // Execute via depth-first backtracking.
+    fn execute_dfs<F>(&self, mut f: F) where F: FnMut(&[Value]) {
+        if self.levels.len() == 0 { // TODO: add a test for this case.
+            f(&[]);
+            return;
+        }
         QueryDfsState {
-            tries: self.tries.clone(),
+            tries: self.tries.iter().map(|&t| match t {
+                Trie::Node(map) => map,
+                Trie::Leaf => unreachable!(),
+            }).collect(),
             levels: &self.levels,
             prefix: Vec::with_capacity(self.levels.len()),
             children: Vec::new(),
@@ -403,13 +412,13 @@ impl<'a> QueryPlan<'a> {
 
 struct QueryDfsState<'a, F> {
     callback: F,
-    tries: Vec<&'a Trie>,       // the current node in each trie that we're investigating.
+    tries: Vec<&'a TrieMap>,    // the current node in each trie that we're investigating.
     levels: &'a Vec<Vec<usize>>,
     prefix: Vec<Value>,      // partial solution: prefix[i] = value of ith variable.
     children: Vec<&'a Trie>, // scratch buffer used to avoid per-call allocation.
     // Trie node stack. When entering a level we push the current node of each
     // trie in that level; on leaving we restore them.
-    saved: Vec<&'a Trie>,
+    saved: Vec<&'a TrieMap>,
 }
 
 impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
@@ -423,24 +432,25 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
         // level trie's map off the `saved` stack (positions mark..mark+width).
         let width = level.len();
         let proposer_pos: usize = (0..width)
-            .min_by_key(|&pos| self.level_map(mark, pos).len())
+            .min_by_key(|&pos| self.saved[mark + pos].len())
             .unwrap();
 
-        let proposer_map = self.level_map(mark, proposer_pos);
+        let proposer_map = self.saved[mark + proposer_pos];
         'keys: for (key, child) in proposer_map {
             self.children.clear();
             // Look up this key in each trie at this level. If any trie lacks this key,
             // skip to the next key.
             for pos in 0..width {
                 if pos == proposer_pos { self.children.push(child); continue; }
-                match self.level_map(mark, pos).get(key) {
+                match self.saved[mark + pos].get(key) {
                     Some(child) => self.children.push(child),
                     None => continue 'keys,
                 }
             }
-            // Write the children into `self.tries` and recurse.
+            // Write the children into `self.tries` and recurse. A Leaf child bottoms out
+            // here and is never read again, so we skip it.
             for (pos, &trie_idx) in level.iter().enumerate() {
-                self.tries[trie_idx] = self.children[pos];
+                if let Trie::Node(map) = self.children[pos] { self.tries[trie_idx] = map; }
             }
             self.recur(*key, level_idx + 1)
         }
@@ -451,19 +461,6 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
             self.tries[trie_idx] = self.saved[mark + pos];
         }
         self.saved.truncate(mark);
-    }
-
-    // Get the map for the trie at self.saved[mark + pos]. Must not be bottomed
-    // out at a Leaf!
-    #[inline]
-    fn level_map(&self, mark: usize, pos: usize) -> &'a TrieMap {
-        match self.saved[mark + pos] {
-            Trie::Node(map) => map,
-            Trie::Leaf => unreachable!(),
-            // // I previously found that using unreachable_unchecked() here improved
-            // // performance significantly, but it seems it no longer does? Weird.
-            // Trie::Leaf => unsafe { core::hint::unreachable_unchecked() },
-        }
     }
 
     #[inline]
