@@ -316,13 +316,11 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
 
 
 // ---------- TRIE INDEXES ----------
-
-type TrieMap = Map<Value, Trie>;
-
 enum Trie {
     Leaf,
     Node(TrieMap),
 }
+type TrieMap = Map<Value, Trie>;
 
 // ==== LONG ASIDE ABOUT LEAPFROG TRIEJOIN AND SORTING-BASED APPROACHES TO WCOJS ====
 //
