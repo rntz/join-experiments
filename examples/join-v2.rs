@@ -11,6 +11,41 @@ macro_rules! print_flush {
 }
 
 
+// ---------- STEPS FOR EXECUTING A QUERY ----------
+//
+// 0. Intern all values so everything is usize and equality is equality. This avoids
+//    needing to put tags on things.
+//
+//    Use one hashtable & counter for each entity & attribute type. This can be
+//    incrementally maintained.
+//
+//    Alternatives: tag every single value and dispatch every single time (slow but maybe
+//    not bad enough to matter); or try to be cleverer about tag placement, eg tag every
+//    column and dispatch once per for-loop (probs ok perf but a pain in the ass to do).
+//
+// 1. CHASING FDS GOES HERE?
+//    I think chasing FDs may be more important than semijoin reduction if I
+//    only have time to do one.
+//
+// 2. SEMIJOIN REDUCTION GOES HERE?
+//
+// 3. Get statistics on it, eg. for each variable, the min across all relations
+//    of the # of values it could have. We can approximate that using the size
+//    of the relation, but can do even better by actually counting distinct
+//    values.
+//
+// 4. Use these stats (& FDs once we have them) to pick a variable order.
+//
+// 5. Build trie indexes on each relation based on the query & var order.
+//    DONE: have Trie::build to build a single index.
+//    TODO: derive which indexes to build based on a query & variable order,
+//    shove them in a struct.
+//
+// 6. Execute query using the indexes.
+//    DONE: see QueryPlan::execute_dfs
+//    TODO: a breadth-first version?
+
+
 // ---------- HASHER SELECTION ----------
 //
 // Hash algorithm impacts join performance heavily (factor of ~3x). Rust's default is slow
@@ -75,48 +110,6 @@ impl std::hash::BuildHasher for FxBuildHasher {
 }
 
 
-// ---------- Loading SNAP graph datasets ----------
-fn load_edges_from<R: std::io::Read>(source: R, max_edges: Option<usize>) -> Vec<(usize, usize)> {
-    if let Some(n) = max_edges {
-        print_flush!("Reading at most {n} edges.");
-    } else {
-        print_flush!("Reading all edges.");
-    }
-    use std::io::{BufRead, BufReader};
-    let file = BufReader::new(source);
-    let mut edges: Vec<(usize, usize)> = Vec::new();
-    for readline in file.lines() {
-        if max_edges.is_some_and(|n| n <= edges.len()) { break }
-        let line = readline.expect("read error");
-        if line.is_empty() { continue }
-        if line.starts_with('#') { continue }
-        let mut elts = line[..].split_whitespace();
-        let v: usize = elts.next().unwrap().parse().expect("malformed src");
-        let u: usize = elts.next().unwrap().parse().expect("malformed dst");
-        edges.push((v,u));
-    }
-    print_flush!(" Got {} edges", edges.len());
-    if edges.is_sorted() {
-        print_flush!(", already sorted.");
-    } else {
-        print_flush!(", sorting...");
-        edges.sort_unstable();
-        print_flush!(" done.");
-    }
-    // Get rid of dupes. This ensures our trie-based WCOJs (which dedup implicitly) will
-    // produce the same # of results as any other approach (which might not).
-    print_flush!(" Deduping...");
-    let before = edges.len();
-    edges.dedup();
-    if edges.len() == before {
-        println!(" no dupes.");
-    } else {
-        println!(" deduped {} -> {}.", before, edges.len());
-    }
-    return edges;
-}
-
-
 // ---------- DATABASES AND QUERIES ----------
 //
 // I'm assuming we intern everything up front. This makes things simpler than figuring out
@@ -144,142 +137,15 @@ trait Database {
 //     fn rows(&self, r: Db::RelId) -> impl Iterator<Item = &[Value]> { (*self).rows(r) }
 // }
 
-// TODO: how do we represent constants in atoms?
-struct Atom<RelId, Var> {
-    relation: RelId,
-    vars: Vec<Var>,
-}
-
 struct Query<Db: Database, Var: Eq + Hash + Copy> {
     vars: Vec<Var>,
     atoms: Vec<Atom<Db::RelId, Var>>,
 }
 
-struct QueryContext<Db: Database, Var: Eq + Hash + Copy> {
-    db: Db,
-    query: Query<Db, Var>,
-}
-
-// A plan has one `indexes` entry for each atom in the query and one level for each
-// variable. The index entries may happen to be duplicates of the same index; that's
-// deliberate: when we execute the plan, we're going to maintain some distinct mutable
-// state corresponding to each entry.
-//
-// levels[i]: bounds for variable i.
-// levels[i][j]: the trie which we should use to bound this variable.
-// Let t = indexes[k] be a trie and d be its depth. Then `k` should occur exactly `d`
-// times in `levels`, each occurrence corresponding to one level of `t`.
-//
-// Example: Consider the query
-//
-//     E(x,y) E(y,z) E(z,x) with variable order x,y,z
-//
-// We'll need two indexes, fwd(x,y) = E(x,y) and bwd(y,x) = E(x,y). You can think of this
-// as rewriting the query so that every atom has the same variable order:
-//
-//     fwd(x,y) fwd(y,z) bwd(x,z)
-//
-// Then this becomes:
-//
-//     QueryPlan {
-//         indexes: [&fwd, &fwd, &bwd],
-//         levels: [[0,2],      // x ← fwd    ∩ bwd    = {x : ∃y,z. E(x,y) ∧ E(z,x)}
-//                  [0,1],      // y ← fwd[x] ∩ fwd    = {y : E(x,y) ∧ ∃z. E(y,z)}
-//                  [1,2]],     // z ← fwd[y] ∩ bwd[x] = {z : E(y,z) ∧ E(z,x) }
-//     }
-struct QueryPlan<'a> {
-    // May contain duplicates. This is deliberate. TODO EXPLAIN
-    indexes: Vec<&'a Trie>,
-    levels: Vec<Vec<usize>>,
-}
-
-impl<'a> QueryPlan<'a> {
-    fn execute_dfs<F>(&self, f: F) where F: FnMut(&[Value]) {
-        // Execute via depth-first backtracking.
-        QueryDfsState {
-            tries: self.indexes.clone(),
-            levels: &self.levels,
-            prefix: Vec::with_capacity(self.levels.len()),
-            children: Vec::new(),
-            saved: Vec::new(),
-            callback: f,
-        }.execute(0)
-    }
-}
-
-struct QueryDfsState<'a, F> {
-    callback: F,
-    tries: Vec<&'a Trie>,       // the current node in each trie that we're investigating.
-    levels: &'a Vec<Vec<usize>>,
-    prefix: Vec<Value>,      // partial solution: prefix[i] = value of ith variable.
-    children: Vec<&'a Trie>, // scratch buffer used to avoid per-call allocation.
-    // Trie node stack. When entering a level we push the current node of each
-    // trie in that level; on leaving we restore them.
-    saved: Vec<&'a Trie>,
-}
-
-impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
-    fn execute(&mut self, level_idx: usize) {
-        let level: &Vec<usize> = &self.levels[level_idx];
-        // Snapshot the current node of each trie in this level onto the `saved` stack so we
-        // can restore them when we're done; `mark` is where this level's slice begins.
-        let mark = self.saved.len();
-        for &trie_idx in level { self.saved.push(self.tries[trie_idx]); }
-        // The proposer is the trie in this level with the fewest children. We read each
-        // level trie's map off the `saved` stack (positions mark..mark+width).
-        let width = level.len();
-        let proposer_pos: usize = (0..width)
-            .min_by_key(|&pos| self.level_map(mark, pos).len())
-            .unwrap();
-
-        let proposer_map = self.level_map(mark, proposer_pos);
-        'keys: for (key, child) in proposer_map {
-            self.children.clear();
-            // Look up this key in each trie at this level. If any trie lacks this key,
-            // skip to the next key.
-            for pos in 0..width {
-                if pos == proposer_pos { self.children.push(child); continue; }
-                match self.level_map(mark, pos).get(key) {
-                    Some(child) => self.children.push(child),
-                    None => continue 'keys,
-                }
-            }
-            // Write the children into `self.tries` and recurse.
-            for (pos, &trie_idx) in level.iter().enumerate() {
-                self.tries[trie_idx] = self.children[pos];
-            }
-            self.recur(*key, level_idx + 1)
-        }
-
-        // Restore every trie in this level to the parent node the caller left it at, then
-        // pop this level's slice off the `saved` stack.
-        for (pos, &trie_idx) in level.iter().enumerate() {
-            self.tries[trie_idx] = self.saved[mark + pos];
-        }
-        self.saved.truncate(mark);
-    }
-
-    // Get the map for the trie at self.saved[mark + pos]. Must not be bottomed
-    // out at a Leaf!
-    #[inline(always)]
-    fn level_map(&self, mark: usize, pos: usize) -> &'a TrieMap {
-        match self.saved[mark + pos] {
-            Trie::Node(map) => map,
-            Trie::Leaf => unsafe { core::hint::unreachable_unchecked() },
-        }
-    }
-
-    #[inline(always)]
-    fn recur(&mut self, next: Value, level_idx: usize) {
-        self.prefix.push(next);
-        if level_idx == self.levels.len() {
-            (self.callback)(self.prefix.as_slice());
-        } else {
-            self.execute(level_idx);
-        }
-        let popped = self.prefix.pop();
-        debug_assert!(popped == Some(next));
-    }
+// TODO: how do we represent constants in atoms?
+struct Atom<RelId, Var> {
+    relation: RelId,
+    vars: Vec<Var>,
 }
 
 // ==== ON IMPLEMENTING COMPUTATIONAL ATOMS ====
@@ -489,48 +355,161 @@ impl Trie {
 // approach" of desugaring constants and variable re-use into separate atoms.
 
 
-// ---------- STEPS FOR EXECUTING A QUERY ----------
+// ---------- WCOJ QUERY PLANS ----------
+struct QueryPlan<'a> {
+    tries: Vec<&'a Trie>,     // one trie per atom
+    levels: Vec<Vec<usize>>,    // one level per variable
+    // Some of the trie pointers may be identical if atoms share indexes.
+}
+
+// A QueryPlan has one `tries` entry for each atom in the query and one level for each
+// variable. The index entries may happen to be duplicates of the same index; that's
+// deliberate: when we execute the plan, we're going to maintain some distinct mutable
+// state corresponding to each entry.
 //
-// 1. CHASING FDS GOES HERE?
-//    I think chasing FDs may be more important than semijoin reduction if I
-//    only have time to do one.
+// levels[i]: bounds for variable i.
+// levels[i][j]: the trie which we should use to bound this variable.
+// Let t = tries[k] be a trie and d be its depth. Then `k` should occur exactly `d`
+// times in `levels`, each occurrence corresponding to one level of `t`.
 //
-// 2. SEMIJOIN REDUCTION GOES HERE?
+// Example: Consider the query
 //
-// 3. Get statistics on it, eg. for each variable, the min across all relations
-//    of the # of values it could have. We can approximate that using the size
-//    of the relation, but can do even better by actually counting distinct
-//    values.
+//     E(x,y) E(y,z) E(z,x) with variable order x,y,z
 //
-// 4. Use these stats (& FDs once we have them) to pick a variable order.
+// We'll need two trie indexes, fwd(x,y) = E(x,y) and bwd(y,x) = E(x,y). You can think of
+// this as rewriting the query so that every atom has the same variable order:
 //
-// 5. Build trie indexes on each relation.
+//     fwd(x,y) fwd(y,z) bwd(x,z)
 //
-// 6. Execute query using the indexes.
+// Then this becomes:
+//
+//     QueryPlan {
+//         tries: [&fwd, &fwd, &bwd],
+//         levels: [[0,2],      // x ← fwd    ∩ bwd    = {x : ∃y,z. E(x,y) ∧ E(z,x)}
+//                  [0,1],      // y ← fwd[x] ∩ fwd    = {y : E(x,y) ∧ ∃z. E(y,z)}
+//                  [1,2]],     // z ← fwd[y] ∩ bwd[x] = {z : E(y,z) ∧ E(z,x) }
+//     }
+
+impl<'a> QueryPlan<'a> {
+    fn execute_dfs<F>(&self, f: F) where F: FnMut(&[Value]) {
+        // Execute via depth-first backtracking.
+        QueryDfsState {
+            tries: self.tries.clone(),
+            levels: &self.levels,
+            prefix: Vec::with_capacity(self.levels.len()),
+            children: Vec::new(),
+            saved: Vec::new(),
+            callback: f,
+        }.execute(0)
+    }
+}
+
+struct QueryDfsState<'a, F> {
+    callback: F,
+    tries: Vec<&'a Trie>,       // the current node in each trie that we're investigating.
+    levels: &'a Vec<Vec<usize>>,
+    prefix: Vec<Value>,      // partial solution: prefix[i] = value of ith variable.
+    children: Vec<&'a Trie>, // scratch buffer used to avoid per-call allocation.
+    // Trie node stack. When entering a level we push the current node of each
+    // trie in that level; on leaving we restore them.
+    saved: Vec<&'a Trie>,
+}
+
+impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
+    fn execute(&mut self, level_idx: usize) {
+        let level: &Vec<usize> = &self.levels[level_idx];
+        // Snapshot the current node of each trie in this level onto the `saved` stack so we
+        // can restore them when we're done; `mark` is where this level's slice begins.
+        let mark = self.saved.len();
+        for &trie_idx in level { self.saved.push(self.tries[trie_idx]); }
+        // The proposer is the trie in this level with the fewest children. We read each
+        // level trie's map off the `saved` stack (positions mark..mark+width).
+        let width = level.len();
+        let proposer_pos: usize = (0..width)
+            .min_by_key(|&pos| self.level_map(mark, pos).len())
+            .unwrap();
+
+        let proposer_map = self.level_map(mark, proposer_pos);
+        'keys: for (key, child) in proposer_map {
+            self.children.clear();
+            // Look up this key in each trie at this level. If any trie lacks this key,
+            // skip to the next key.
+            for pos in 0..width {
+                if pos == proposer_pos { self.children.push(child); continue; }
+                match self.level_map(mark, pos).get(key) {
+                    Some(child) => self.children.push(child),
+                    None => continue 'keys,
+                }
+            }
+            // Write the children into `self.tries` and recurse.
+            for (pos, &trie_idx) in level.iter().enumerate() {
+                self.tries[trie_idx] = self.children[pos];
+            }
+            self.recur(*key, level_idx + 1)
+        }
+
+        // Restore every trie in this level to the parent node the caller left it at, then
+        // pop this level's slice off the `saved` stack.
+        for (pos, &trie_idx) in level.iter().enumerate() {
+            self.tries[trie_idx] = self.saved[mark + pos];
+        }
+        self.saved.truncate(mark);
+    }
+
+    // Get the map for the trie at self.saved[mark + pos]. Must not be bottomed
+    // out at a Leaf!
+    #[inline(always)]
+    fn level_map(&self, mark: usize, pos: usize) -> &'a TrieMap {
+        match self.saved[mark + pos] {
+            Trie::Node(map) => map,
+            Trie::Leaf => unsafe { core::hint::unreachable_unchecked() },
+        }
+    }
+
+    #[inline(always)]
+    fn recur(&mut self, next: Value, level_idx: usize) {
+        self.prefix.push(next);
+        if level_idx == self.levels.len() {
+            (self.callback)(self.prefix.as_slice());
+        } else {
+            self.execute(level_idx);
+        }
+        let popped = self.prefix.pop();
+        debug_assert!(popped == Some(next));
+    }
+}
 
 
 // ---------- BENCHMARKS ----------
 fn main() {
-    tests::snap_triangles_undirected("ca-GrQc.txt", None);
-    tests::snap_triangles_undirected("wiki-Vote.txt", None);
-    tests::snap_triangles_undirected("cit-HepTh.txt", None);
-    tests::snap_triangles_undirected("email-Enron.txt", None);
-    tests::snap_triangles_undirected("soc-Epinions1.txt", None);
-    tests::snap_triangles_undirected("soc-Slashdot0811.txt", None);
-    // // These are real slow:
-    // tests::snap_triangles_undirected("twitter_combined.txt", None);
-    // tests::snap_triangles_undirected("soc-LiveJournal1.txt", None);
+    let datasets: Vec<&'static str> = vec![
+        "ca-GrQc.txt",          // 14k undirected edges -> 48k undirected triangles
+        "wiki-Vote.txt",        // 100k -> 600k
+        "email-Enron.txt",      // 184k -> 700k
+        "soc-Slashdot0811.txt", // 470k -> 550k
+        "cit-HepTh.txt",        // 350k -> 1.5m
+        "soc-Epinions1.txt",    // 400k -> 1.6m
+        // "twitter_combined.txt", // 1.3m -> 13m          ~2s to run
+        // "soc-LiveJournal1.txt", // 43m  -> 285m         ~2min to run!
+    ];
 
-    tests::snap_triangles_directed("ca-GrQc.txt", None);
-    tests::snap_triangles_directed("wiki-Vote.txt", None);
-    tests::snap_triangles_directed("cit-HepTh.txt", None);
-    // tests::snap_triangles_directed("email-Enron.txt", None);
-    // tests::snap_triangles_directed("soc-Epinions1.txt", None);
-    // tests::snap_triangles_directed("soc-Slashdot0811.txt", None);
-    // tests::snap_triangles_directed("twitter_combined.txt", None);
+    // With FxHash, WCO underperforms non-WCO on these (except LiveJournal1).
+    // With SipHash (Rust default), it beats non-WCO except on ca-GrQc.
+    // So they're competitive, but the non-WCO does more hash probes.
+    println!("========== UNDIRECTED TRIANGLE BENCHMARKS ==========");
+    for &name in &datasets {
+        tests::snap_triangles_undirected(name, None);
+    }
+
+    // // These mostly, but not always, generate many more results. NB. each directed
+    // // triangle is counted 3x (for its 3 rotations), except for self-triangles (x->x->x).
+    // println!("========== DIRECTED TRIANGLE BENCHMARKS ==========");
+    // for &name in &datasets {
+    //     tests::snap_triangles_directed(name, None);
+    // }
 }
 
-
+
 // ============================================================================
 // ========= TESTS, BENCHMARKS, & HELPERS (mostly claude-generated)  ==========
 // ============================================================================
@@ -549,6 +528,47 @@ mod tests {
     use super::*;
     use super::IndexColumnShape::{TrieLevel, EqColumn, EqConst};
     use std::collections::{HashMap, HashSet};
+
+    // ---- Loading SNAP graph datasets ----
+    fn load_edges_from<R: std::io::Read>(source: R, max_edges: Option<usize>) -> Vec<(usize, usize)> {
+        if let Some(n) = max_edges {
+            print_flush!("Reading at most {n} edges.");
+        } else {
+            print_flush!("Reading all edges.");
+        }
+        use std::io::{BufRead, BufReader};
+        let file = BufReader::new(source);
+        let mut edges: Vec<(usize, usize)> = Vec::new();
+        for readline in file.lines() {
+            if max_edges.is_some_and(|n| n <= edges.len()) { break }
+            let line = readline.expect("read error");
+            if line.is_empty() { continue }
+            if line.starts_with('#') { continue }
+            let mut elts = line[..].split_whitespace();
+            let v: usize = elts.next().unwrap().parse().expect("malformed src");
+            let u: usize = elts.next().unwrap().parse().expect("malformed dst");
+            edges.push((v,u));
+        }
+        print_flush!(" Got {} edges", edges.len());
+        if edges.is_sorted() {
+            print_flush!(", already sorted.");
+        } else {
+            print_flush!(", sorting...");
+            edges.sort_unstable();
+            print_flush!(" done.");
+        }
+        // Get rid of dupes. This ensures our trie-based WCOJs (which dedup implicitly) will
+        // produce the same # of results as any other approach (which might not).
+        print_flush!(" Deduping...");
+        let before = edges.len();
+        edges.dedup();
+        if edges.len() == before {
+            println!(" no dupes.");
+        } else {
+            println!(" deduped {} -> {}.", before, edges.len());
+        }
+        return edges;
+    }
 
     // ---- A trivial in-memory Database backed by Vecs. ----
     struct VecDb {
@@ -840,7 +860,7 @@ mod tests {
         // WCOJ phase 2: execute the join, materializing + sorting the results just like the
         // brute force does, so the two are compared on equal terms.
         let plan = QueryPlan {
-            indexes: vec![&fwd, &fwd, &bwd],
+            tries: vec![&fwd, &fwd, &bwd],
             levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
         };
         let t = Instant::now();
@@ -890,7 +910,7 @@ mod tests {
         let build_time = wcoj_start.elapsed();
 
         let plan = QueryPlan {
-            indexes: vec![&fwd, &fwd, &fwd],
+            tries: vec![&fwd, &fwd, &fwd],
             levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
         };
         let t = Instant::now();
