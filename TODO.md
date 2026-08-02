@@ -1,3 +1,5 @@
+TODOs for examples/join-v2.rs:
+
 - why is snap_triangles_directed("twitter_combined.txt", None) failing?
   why are we getting different #s of triangles from the binary vs WCO joins?
   could try writing triangles to files and diffing them?
