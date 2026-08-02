@@ -1,4 +1,18 @@
-TODOs for examples/join-v2.rs:
+# NOTES
+
+Main file being developed right now is `examples/join-v2.rs`.
+
+To run tests,
+
+    cargo test --example join-v2
+
+To run benchmark (ie `main` from join-v2.rs):
+
+    cargo run --release --example join-v2
+
+Use `--release` or else it will be slow.
+
+# TODOs
 
 - why is snap_triangles_directed("twitter_combined.txt", None) failing?
   why are we getting different #s of triangles from the binary vs WCO joins?
