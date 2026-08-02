@@ -1,4 +1,4 @@
-#![allow(missing_docs, unused, dead_code)]
+#![allow(missing_docs, dead_code)]
 
 use std::io::prelude::*;
 use std::time::Instant;
@@ -194,7 +194,7 @@ struct QueryPlan<'a> {
 }
 
 impl<'a> QueryPlan<'a> {
-    fn execute_dfs<F>(&self, mut f: F) where F: FnMut(&[Value]) {
+    fn execute_dfs<F>(&self, f: F) where F: FnMut(&[Value]) {
         // Execute via depth-first backtracking.
         QueryDfsState {
             tries: self.indexes.clone(),
@@ -546,6 +546,7 @@ fn main() {
 // hand-builds the trie indexes and the `QueryPlan` (indexes + levels) that a
 // planner would eventually produce, then checks `Trie::build` and
 // `QueryPlan::execute_dfs` against a brute-force computation over small data.
+#[allow(unused_imports)]
 mod tests {
     use super::*;
     use super::IndexColumnShape::{TrieLevel, EqColumn, EqConst};
