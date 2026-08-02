@@ -1,0 +1,10 @@
+[package]
+name = "rntz-joins"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[[example]]
+name = "join-v2"
+test = true
