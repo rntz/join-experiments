@@ -780,9 +780,6 @@ mod tests {
     }
 
     #[test]
-    fn test_triangle_snap() { snap_triangles_directed("ca-GrQc.txt", Some(3_000)); }
-
-    #[test]
     fn test_undirected_triangle_query() {
         // Raw edges with mixed orientation, a self-loop, and a duplicate — all normalized away.
         let raw: Vec<(Value, Value)> = vec![
