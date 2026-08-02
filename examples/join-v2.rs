@@ -455,15 +455,18 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
 
     // Get the map for the trie at self.saved[mark + pos]. Must not be bottomed
     // out at a Leaf!
-    #[inline(always)]
+    #[inline]
     fn level_map(&self, mark: usize, pos: usize) -> &'a TrieMap {
         match self.saved[mark + pos] {
             Trie::Node(map) => map,
-            Trie::Leaf => unsafe { core::hint::unreachable_unchecked() },
+            Trie::Leaf => unreachable!(),
+            // // I previously found that using unreachable_unchecked() here improved
+            // // performance significantly, but it seems it no longer does? Weird.
+            // Trie::Leaf => unsafe { core::hint::unreachable_unchecked() },
         }
     }
 
-    #[inline(always)]
+    #[inline]
     fn recur(&mut self, next: Value, level_idx: usize) {
         self.prefix.push(next);
         if level_idx == self.levels.len() {
