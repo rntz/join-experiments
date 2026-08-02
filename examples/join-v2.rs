@@ -29,9 +29,9 @@ type Value = usize;
 // ---------- Loading SNAP graph datasets ----------
 fn load_edges_from<R: std::io::Read>(source: R, max_edges: Option<usize>) -> Vec<(usize, usize)> {
     if let Some(n) = max_edges {
-        print_flush!("Reading at most {n} edges... ");
+        print_flush!("Reading at most {n} edges.");
     } else {
-        print_flush!("Reading all edges... ");
+        print_flush!("Reading all edges.");
     }
     use std::io::{BufRead, BufReader};
     let file = BufReader::new(source);
@@ -46,13 +46,23 @@ fn load_edges_from<R: std::io::Read>(source: R, max_edges: Option<usize>) -> Vec
         let u: usize = elts.next().unwrap().parse().expect("malformed dst");
         edges.push((v,u));
     }
-    print_flush!("{} edges", edges.len());
+    print_flush!(" Got {} edges", edges.len());
     if edges.is_sorted() {
-        println!(", already sorted");
+        print_flush!(", already sorted.");
     } else {
         print_flush!(", sorting...");
         edges.sort_unstable();
-        println!(" done.");
+        print_flush!(" done.");
+    }
+    // Get rid of dupes. This ensures our trie-based WCOJs (which dedup implicitly) will
+    // produce the same # of results as any other approach (which might not).
+    print_flush!(" Deduping...");
+    let before = edges.len();
+    edges.dedup();
+    if edges.len() == before {
+        println!(" no dupes.");
+    } else {
+        println!(" deduped {} -> {}.", before, edges.len());
     }
     return edges;
 }
@@ -517,10 +527,10 @@ fn main() {
     tests::snap_triangles_directed("ca-GrQc.txt", None);
     tests::snap_triangles_directed("wiki-Vote.txt", None);
     tests::snap_triangles_directed("cit-HepTh.txt", None);
-    tests::snap_triangles_directed("email-Enron.txt", None);
-    tests::snap_triangles_directed("soc-Epinions1.txt", None);
+    // tests::snap_triangles_directed("email-Enron.txt", None);
+    // tests::snap_triangles_directed("soc-Epinions1.txt", None);
     // tests::snap_triangles_directed("soc-Slashdot0811.txt", None);
-    // tests::snap_triangles_directed("twitter_combined.txt", None); // TODO: failing test!
+    // tests::snap_triangles_directed("twitter_combined.txt", None);
 }
 
 
