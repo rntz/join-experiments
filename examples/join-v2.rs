@@ -412,13 +412,18 @@ impl<'a> QueryPlan<'a> {
 
 struct QueryDfsState<'a, F> {
     callback: F,
-    tries: Vec<&'a TrieMap>,    // the current node in each trie that we're investigating.
     levels: &'a Vec<Vec<usize>>,
-    prefix: Vec<Value>,      // partial solution: prefix[i] = value of ith variable.
-    children: Vec<&'a Trie>, // scratch buffer used to avoid per-call allocation.
+    // Partial solution: prefix[i] = value of ith variable.
+    prefix: Vec<Value>,
+    // For each atom, the data of the node in the corresponding trie that we're currently
+    // at. (If this trie has bottomed-out at a Leaf, this will hold its parent - but it
+    // doesn't matter, we don't read leaves).
+    tries: Vec<&'a TrieMap>,
     // Trie node stack. When entering a level we push the current node of each
     // trie in that level; on leaving we restore them.
     saved: Vec<&'a TrieMap>,
+    // Scratch buffer used to avoid per-call allocation.
+    children: Vec<&'a Trie>,
 }
 
 impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
@@ -447,12 +452,22 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
                     None => continue 'keys,
                 }
             }
-            // Write the children into `self.tries` and recurse. A Leaf child bottoms out
-            // here and is never read again, so we skip it.
-            for (pos, &trie_idx) in level.iter().enumerate() {
-                if let Trie::Node(map) = self.children[pos] { self.tries[trie_idx] = map; }
+
+            // We've found a match! Report it if done, or recurse to continue solving.
+            self.prefix.push(*key);
+            let next_level = level_idx + 1;
+            if next_level == self.levels.len() {
+                (self.callback)(&self.prefix);
+            } else {
+                // Write the children into `self.tries` and recurse. A Leaf child bottoms out
+                // here and is never read again, so we skip it.
+                for (pos, &trie_idx) in level.iter().enumerate() {
+                    if let Trie::Node(map) = self.children[pos] { self.tries[trie_idx] = map; }
+                }
+                self.execute(next_level);
             }
-            self.recur(*key, level_idx + 1)
+            let popped = self.prefix.pop();
+            debug_assert!(popped == Some(*key));
         }
 
         // Restore every trie in this level to the parent node the caller left it at, then
@@ -461,18 +476,6 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
             self.tries[trie_idx] = self.saved[mark + pos];
         }
         self.saved.truncate(mark);
-    }
-
-    #[inline]
-    fn recur(&mut self, next: Value, level_idx: usize) {
-        self.prefix.push(next);
-        if level_idx == self.levels.len() {
-            (self.callback)(self.prefix.as_slice());
-        } else {
-            self.execute(level_idx);
-        }
-        let popped = self.prefix.pop();
-        debug_assert!(popped == Some(next));
     }
 }
 
