@@ -591,7 +591,14 @@ mod tests {
     // Run a plan and return its output rows in sorted order.
     fn run_plan(plan: &QueryPlan) -> Vec<Vec<Value>> {
         let mut out: Vec<Vec<Value>> = Vec::new();
-        plan.execute_dfs(|row| out.push(row.to_vec()));
+        let mut counter: usize = 0;
+        plan.execute_dfs(|row| {
+            out.push(row.to_vec());
+            counter += 1;
+            if counter % 1_000_000 == 0 {
+                println!("found {:2} million results!", counter / 1_000_000);
+            }
+        });
         normalize(out)
     }
 
