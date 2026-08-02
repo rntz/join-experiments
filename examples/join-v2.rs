@@ -57,35 +57,6 @@ fn load_edges_from<R: std::io::Read>(source: R, max_edges: Option<usize>) -> Vec
     return edges;
 }
 
-fn load_edges() -> Vec<(usize, usize)> {
-    use std::ffi::OsString;
-    use std::fs::File;
-    use std::env::{var, VarError};
-    let args = std::env::args_os();
-    let path: OsString = args.skip(1).next().unwrap_or(DEFAULT_FILE.into());
-    println!("Reading from {:?}", path);
-    let file = File::open(&path).expect("couldn't open file");
-    let max_edges: Option<usize> = match var("EDGES") {
-        Err(VarError::NotPresent) => Some(DEFAULT_MAX_EDGES), // default
-        Err(VarError::NotUnicode(_)) => panic!("EDGES not valid unicode"),
-        // explicit ways to set "no limit"
-        Ok(s) if s == "all" => None,
-        Ok(s) => Some({
-            let (factor, s) = if let Some(t) = s.strip_suffix("k") {
-                (1_000, t)
-            } else if let Some(t) = s.strip_suffix("M") {
-                (1_000_000, t)
-            } else if let Some(t) = s.strip_suffix("m") {
-                (1_000_000, t)
-            } else {
-                (1, &s[..])
-            };
-            factor * s.parse::<usize>().expect("malformed MAX_EDGES")
-        }),
-    };
-    return load_edges_from(file, max_edges)
-}
-
 
 // ---------- DATABASES AND QUERIES ----------
 //
