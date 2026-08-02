@@ -27,15 +27,11 @@ type Value = usize;
 
 
 // ---------- Loading SNAP graph datasets ----------
-// Set EDGES environment variable to override; EDGES=all for no limit.
-const DEFAULT_MAX_EDGES: usize = 1_000;
-const DEFAULT_FILE: &str = "examples/data/ca-GrQc.txt";
-
 fn load_edges_from<R: std::io::Read>(source: R, max_edges: Option<usize>) -> Vec<(usize, usize)> {
     if let Some(n) = max_edges {
-        println!("Reading at most {n} edges...");
+        print_flush!("Reading at most {n} edges... ");
     } else {
-        println!("Reading all edges...");
+        print_flush!("Reading all edges... ");
     }
     use std::io::{BufRead, BufReader};
     let file = BufReader::new(source);
@@ -56,7 +52,7 @@ fn load_edges_from<R: std::io::Read>(source: R, max_edges: Option<usize>) -> Vec
     } else {
         print_flush!(", sorting...");
         edges.sort_unstable();
-        println!(" done!");
+        println!(" done.");
     }
     return edges;
 }
@@ -830,6 +826,15 @@ mod tests {
         assert_eq!(got, vec![vec![0, 1, 2], vec![0, 3, 4]], "expected exactly two triangles");
     }
 
+    fn snap_load(dataset: &str, max_edges: Option<usize>) -> Vec<(usize, usize)> {
+        use std::fs::File;
+        let path = format!("{}/examples/data/{dataset}", env!("CARGO_MANIFEST_DIR"));
+        let file = File::open(&path).expect("could not open data file");
+        println!("{dataset}: loading from {path}");
+        // load_edges_from already sorts.
+        load_edges_from(file, max_edges)
+    }
+
     // ---- Test 5: triangle query on a real SNAP dataset. ----
     //
     // Loads (a prefix of) the named dataset from examples/data/ and runs the same triangle
@@ -838,11 +843,7 @@ mod tests {
     // The crate directory is resolved at compile time, so it works regardless of the
     // working directory; if the file is missing the test is skipped, not failed.
     pub fn snap_triangles_directed(dataset: &str, max_edges: Option<usize>) {
-        use std::fs::File;
-        let path = format!("{}/examples/data/{dataset}", env!("CARGO_MANIFEST_DIR"));
-        let file = File::open(&path).expect("could not open data file");
-        // load_edges_from already sorts.
-        let edges = load_edges_from(file, max_edges);
+        let edges = snap_load(dataset, max_edges);
         let db = edge_db(&edges);
 
         // WCOJ phase 1: build the trie indexes.
@@ -867,11 +868,11 @@ mod tests {
         let brute_time = t.elapsed();
 
         println!(
-            "{dataset}: {} edges -> {} directed triangles
-  wcoj build    {:?}
-  wcoj execute  {:?}
-  wcoj total    {:?}    found {} triangles
-  2-edge-filter {:?}    found {} triangles
+            "{dataset}: {} undirected edges -> {} triangles
+  wcoj build    {:>9.2?}
+  wcoj execute  {:>9.2?}
+  wcoj total    {:>9.2?}    found {:8} triangles
+  2-edge-filter {:>9.2?}    found {:8} triangles
 ",
             edges.len(), got.len(),
             build_time,
@@ -895,10 +896,7 @@ mod tests {
     // a->b, b->c, a->c exactly once. The query is therefore E(x,y) E(y,z) E(x,z) (note the
     // last atom, vs E(z,x) for directed 3-cycles), order x,y,z.
     pub fn snap_triangles_undirected(dataset: &str, max_edges: Option<usize>) {
-        use std::fs::File;
-        let path = format!("{}/examples/data/{dataset}", env!("CARGO_MANIFEST_DIR"));
-        let file = File::open(&path).expect("could not open data file");
-        let raw = load_edges_from(file, max_edges);
+        let raw = snap_load(dataset, max_edges);
         let edges = to_low_high(&raw);
         let db = edge_db(&edges);
 
@@ -921,10 +919,10 @@ mod tests {
 
         println!(
             "{dataset}: {} undirected edges -> {} triangles
-  wcoj build    {:?}
-  wcoj execute  {:?}
-  wcoj total    {:?}    found {} triangles
-  2-edge-filter {:?}    found {} triangles
+  wcoj build    {:>9.2?}
+  wcoj execute  {:>9.2?}
+  wcoj total    {:>9.2?}    found {:8} triangles
+  2-edge-filter {:>9.2?}    found {:8} triangles
 ",
             edges.len(), got.len(),
             build_time,
