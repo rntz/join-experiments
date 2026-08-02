@@ -21,10 +21,6 @@ fn clone_with_capacity<A: Clone>(n: usize, src: &Vec<A>) -> Vec<A> { // TODO: el
     return r;
 }
 
-// I'm assuming we intern everything up front. This makes things simpler than figuring out
-// where to put tags to minimize tag-checking overhead.
-type Value = usize;
-
 
 // ---------- Loading SNAP graph datasets ----------
 fn load_edges_from<R: std::io::Read>(source: R, max_edges: Option<usize>) -> Vec<(usize, usize)> {
@@ -70,6 +66,10 @@ fn load_edges_from<R: std::io::Read>(source: R, max_edges: Option<usize>) -> Vec
 
 // ---------- DATABASES AND QUERIES ----------
 //
+// I'm assuming we intern everything up front. This makes things simpler than figuring out
+// where to put tags to minimize tag-checking overhead.
+type Value = usize;
+
 // A database is something which has relations and can tabulate them.
 //
 // TODO: how do I incorporate functional dependency information here?
