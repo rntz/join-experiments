@@ -25,8 +25,9 @@ DATASETS=(
     "email-Enron"               # ~ 370k
     "soc-Epinions1"             # ~ 500k
     "soc-Slashdot0811"          # ~ 900k
-    "twitter_combined"          # ~2400k
-    "soc-LiveJournal1"          # ~6900k
+    # commented out because they're quite large.
+    # "twitter_combined"          # ~2400k
+    # "soc-LiveJournal1"          # ~6900k
 )
 
 mkdir -p "$DATA_DIR"
