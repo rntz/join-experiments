@@ -18,6 +18,24 @@ You'll need to download some SNAP datasets first:
 
 This can be slow depending on your network connection.
 
+# High level goals not started on yet
+
+- computational atoms: computing functions on attribute values
+- aggregations
+- mutation & incremental maintenance over it
+
+# Pieces of joins I haven't implemented yet
+
+- interning!
+- constants in queries!
+- variable orders!
+- deriving indexes & query plan given a variable order!
+
+# Nice to haves I haven't implemented yet
+
+- chasing FDs
+- semijoins
+
 # TODOs
 
 - fix bug: Consider `E(x,y) T(5)`. The atom `T(5)` will build a depth-0 `Trie::Leaf` index
