@@ -54,7 +54,7 @@ use crate::hash::Map;
 //
 // 7. Decode the results by de-interning everything.
 
-
+
 // ---------- DATABASES AND QUERIES ----------
 //
 // I'm assuming we intern everything up front. This makes things simpler than figuring out
@@ -125,7 +125,7 @@ pub struct Atom<RelId, Var> {
 //   "Function" does NOT mean computational function here: it means functionaln
 //   dependency.)
 
-
+
 // ---------- TRIE INDEXES ----------
 pub enum Trie {
     Leaf,
@@ -166,7 +166,7 @@ pub type TrieMap = Map<Value, Trie>;
 // search; I'm not sure which they're using. Using binary search can make dense joins,
 // where many values match, quite inefficient.)
 
-
+
 // ---------- ON TRIE INDEXING FOR WCOJs ----------
 //
 // Each relation may need multiple trie indexes, because with a single variable order
@@ -295,7 +295,7 @@ impl Trie {
 // R(x,x) can use the same index. It is more obvious how to do this using the "alternative
 // approach" of desugaring constants and variable re-use into separate atoms.
 
-
+
 // ---------- WCOJ QUERY PLANS ----------
 pub struct QueryPlan<'a> {
     // TODO: rewrite to Vec<Option<&'a Trie>> because indexes can be empty. in this case
@@ -430,7 +430,7 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
     }
 }
 
-
+
 // ---------- UNIT TESTS (Claude-generated) ----------
 //
 // Run Trie::build across all IndexColumnShape kinds. This pokes at the trie's
