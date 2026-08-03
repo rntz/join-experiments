@@ -1,16 +1,14 @@
-#![allow(missing_docs, dead_code)]
-
-use std::io::prelude::*;
-use std::time::Instant;
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::hash::Hash;
 
-macro_rules! print_flush {
-    ($($e:tt)*) => { { print!($($e)*); std::io::stdout().flush().unwrap() } }
-}
+use crate::hash::Map;
 
-
+// ---------- NEXT THINGS TO IMPLEMENT ----------
+//
+// 0. Pick a variable order in a vaguely reasonable way.
+// 0. Construct indexes given a query and a variable order.
+// 0. Computational atoms?
+// 0. Representing & chasing FDs.
+
 // ---------- STEPS FOR EXECUTING A QUERY ----------
 //
 // 0. Intern all values so everything is usize and equality is equality. This avoids
@@ -22,6 +20,15 @@ macro_rules! print_flush {
 //    Alternatives: tag every single value and dispatch every single time (slow but maybe
 //    not bad enough to matter); or try to be cleverer about tag placement, eg tag every
 //    column and dispatch once per for-loop (probs ok perf but a pain in the ass to do).
+//
+//    Future problems for this approach: computation over interned values. For attribute
+//    values that fit in a usize, this is not a problem. For strings etc, computation
+//    atoms would need the ability to get the value for a given interned id, which is
+//    fine. The real problem is if the computation produces a new value, one that isn't
+//    interned. How do we represent this? We could intern it, but... what if it's only
+//    used temporarily in the query result? Then we've expanded our intern table for no
+//    purpose. I think the best approach is to use a "temporary" intern table that holds
+//    only these intermediate results, but this is kinda complicated :(.
 //
 // 1. CHASING FDS GOES HERE?
 //    I think chasing FDs may be more important than semijoin reduction if I
@@ -44,80 +51,15 @@ macro_rules! print_flush {
 // 6. Execute query using the indexes.
 //    DONE: see QueryPlan::execute_dfs
 //    TODO: a breadth-first version?
-
-
-// ---------- HASHER SELECTION ----------
 //
-// Hash algorithm impacts join performance heavily (factor of ~3x). Rust's default is slow
-// in exchange for extra security against adversarial attacks. We probably don't need
-// this? So we use a much simpler, faster hash, FxHash. Would be fine to replace this with
-// a library, presumably there's some crate in the Rust ecosystem for this.
-//
-// Pick your hash algorithm by changing "type HashBuilder":
-type HashBuilder = FxBuildHasher; // fast, non-cryptographic hash
-// type HashBuilder = std::collections::hash_map::RandomState; // stdlib SipHash
+// 7. Decode the results by de-interning everything.
 
-type Map<K, V> = HashMap<K, V, HashBuilder>;
-type Set<K> = HashSet<K, HashBuilder>;
 
-// An implementation of FxHash (Claude-generated).
-const FX_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-const FX_ROTATE: u32 = 5;
-
-// One issue with FxHash is that zeros always hash to zero; eg all Vecs containing only
-// zeros will hash-collide. So hashing variable-length structures is a bit dangerous.
-// Fortunately we don't do that. (Potential fix: make the initial hash 1.)
-#[derive(Default)]
-struct FxHasher { hash: u64 }
-
-impl FxHasher {
-    #[inline]
-    fn add(&mut self, i: u64) {
-        self.hash = (self.hash.rotate_left(FX_ROTATE) ^ i).wrapping_mul(FX_SEED);
-    }
-}
-
-impl std::hash::Hasher for FxHasher {
-    #[inline]
-    fn finish(&self) -> u64 { self.hash }
-    #[inline]
-    fn write_usize(&mut self, i: usize) { self.add(i as u64); }
-    #[inline]
-    fn write_u64(&mut self, i: u64) { self.add(i); }
-    #[inline]
-    fn write_u32(&mut self, i: u32) { self.add(i as u64); }
-    #[inline]
-    fn write_u8(&mut self, i: u8) { self.add(i as u64); }
-    #[inline]
-    fn write(&mut self, mut bytes: &[u8]) {
-        while bytes.len() >= 8 {
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(&bytes[..8]);
-            self.add(u64::from_le_bytes(buf));
-            bytes = &bytes[8..];
-        }
-        if !bytes.is_empty() {
-            let mut buf = [0u8; 8];
-            buf[..bytes.len()].copy_from_slice(bytes);
-            self.add(u64::from_le_bytes(buf));
-        }
-    }
-}
-
-#[derive(Default, Clone)]
-struct FxBuildHasher;
-impl std::hash::BuildHasher for FxBuildHasher {
-    type Hasher = FxHasher;
-    #[inline]
-    fn build_hasher(&self) -> FxHasher { FxHasher::default() }
-}
-
-
 // ---------- DATABASES AND QUERIES ----------
 //
 // I'm assuming we intern everything up front. This makes things simpler than figuring out
 // where to put tags to minimize tag-checking overhead.
-type Value = usize;
+pub type Value = usize;
 
 // A database is something which has relations and can tabulate them.
 //
@@ -126,7 +68,7 @@ type Value = usize;
 // ANSWER: simplest way is to let each relation declare a primary key, which all other
 // keys are determined by. This is less general than full FDs but easier to represent and
 // plan around and handles ACSet-type schemas.
-trait Database {
+pub trait Database {
     type RelId: Eq + Hash + Clone;
     fn arity(&self, r: Self::RelId) -> usize;
     fn count(&self, r: Self::RelId) -> usize;
@@ -140,15 +82,15 @@ trait Database {
 //     fn rows(&self, r: Db::RelId) -> impl Iterator<Item = &[Value]> { (*self).rows(r) }
 // }
 
-struct Query<Db: Database, Var: Eq + Hash + Copy> {
-    vars: Vec<Var>,
-    atoms: Vec<Atom<Db::RelId, Var>>,
+pub struct Query<Db: Database, Var: Eq + Hash + Copy> {
+    pub vars: Vec<Var>,
+    pub atoms: Vec<Atom<Db::RelId, Var>>,
 }
 
 // TODO: how do we represent constants in atoms?
-struct Atom<RelId, Var> {
-    relation: RelId,
-    vars: Vec<Var>,
+pub struct Atom<RelId, Var> {
+    pub relation: RelId,
+    pub vars: Vec<Var>,
 }
 
 // ==== ON IMPLEMENTING COMPUTATIONAL ATOMS ====
@@ -183,13 +125,13 @@ struct Atom<RelId, Var> {
 //   "Function" does NOT mean computational function here: it means functionaln
 //   dependency.)
 
-
+
 // ---------- TRIE INDEXES ----------
-enum Trie {
+pub enum Trie {
     Leaf,
     Node(TrieMap),
 }
-type TrieMap = Map<Value, Trie>;
+pub type TrieMap = Map<Value, Trie>;
 
 // ==== LONG ASIDE ABOUT LEAPFROG TRIEJOIN AND SORTING-BASED APPROACHES TO WCOJS ====
 //
@@ -226,7 +168,7 @@ type TrieMap = Map<Value, Trie>;
 // search; I'm not sure which they're using. Using binary search can make dense joins,
 // where many values match, quite inefficient.)
 
-
+
 // ---------- ON TRIE INDEXING FOR WCOJs ----------
 //
 // Each relation may need multiple trie indexes, because with a single variable order
@@ -240,9 +182,10 @@ type TrieMap = Map<Value, Trie>;
 // variables in xs. An index can be specified by indicating what to do for each column of
 // the relation.
 
-type IndexShape = Vec<IndexColumnShape>; // length = arity of relation
+pub type IndexShape = Vec<IndexColumnShape>; // length = arity of relation
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum IndexColumnShape {   // what to do with column i.
+pub enum IndexColumnShape {
+    // what to do with column i.
     TrieLevel(usize), // TrieLevel(k) => becomes trie level k.
     EqConst(Value),   // EqConst(v)   => filter: equal to v, otherwise discard.
     EqColumn(usize),  // EqColumn(j)  => filter: equal to column j, otherwise discard.
@@ -255,7 +198,7 @@ impl Trie {
     // Trie::build() returns None if the trie is empty. This is necessary to distinguish
     // between Some(Trie::Leaf()), a trie containing an single empty tuple, and None, an
     // empty trie.
-    fn build<Db: Database>(db: &Db, rel: Db::RelId, shape: &IndexShape) -> Option<Trie> {
+    pub fn build<Db: Database>(db: &Db, rel: Db::RelId, shape: &IndexShape) -> Option<Trie> {
         // Preprocess `shape` into:
         //  - `level_to_col[k]` is the column that becomes trie level k.
         //  - `filters` are the columns carrying EqConst/EqColumn checks.
@@ -354,13 +297,13 @@ impl Trie {
 // R(x,x) can use the same index. It is more obvious how to do this using the "alternative
 // approach" of desugaring constants and variable re-use into separate atoms.
 
-
+
 // ---------- WCOJ QUERY PLANS ----------
-struct QueryPlan<'a> {
+pub struct QueryPlan<'a> {
     // TODO: rewrite to Vec<Option<&'a Trie>> because indexes can be empty. in this case
     // there are no query results; we should handle this in QueryPlan::execute_dfs().
-    tries: Vec<&'a Trie>, // one trie per atom.
-    levels: Vec<Vec<usize>>,      // one level per variable
+    pub tries: Vec<&'a Trie>, // one trie per atom.
+    pub levels: Vec<Vec<usize>>,  // one level per variable
     // Some of the trie pointers may be identical if atoms share indexes.
 }
 
@@ -394,7 +337,7 @@ struct QueryPlan<'a> {
 
 impl<'a> QueryPlan<'a> {
     // Execute via depth-first backtracking.
-    fn execute_dfs<F>(&self, mut f: F) where F: FnMut(&[Value]) {
+    pub fn execute_dfs<F>(&self, mut f: F) where F: FnMut(&[Value]) {
         if self.levels.is_empty() { // TODO: add a test for this case.
             f(&[]);
             return;
@@ -410,6 +353,23 @@ impl<'a> QueryPlan<'a> {
             saved: Vec::new(),
             callback: f,
         }.execute(0)
+    }
+
+    // Convenience wrapper: run depth-first, collect every row, and sort. Used by tests and
+    // the benchmark's correctness cross-checks.
+    pub fn collect_dfs(&self) -> Vec<Vec<Value>> {
+        let mut out: Vec<Vec<Value>> = Vec::new();
+        self.execute_dfs(|row| out.push(row.to_vec()));
+        out.sort_unstable();
+        out
+    }
+
+    // As collect_dfs, but breadth-first. Lets callers compare the two execution strategies.
+    pub fn collect_bfs(&self) -> Vec<Vec<Value>> {
+        let mut out: Vec<Vec<Value>> = Vec::new();
+        self.execute_bfs(|row| out.push(row.to_vec()));
+        out.sort_unstable();
+        out
     }
 
     // ======================================================================
@@ -428,7 +388,7 @@ impl<'a> QueryPlan<'a> {
     //  - `nodes`: `n_atoms` trie-node pointers per solution (each atom's current trie node).
     // So partial solution `row` owns prefixes[row*depth .. (row+1)*depth] and
     // nodes[row*n_atoms .. (row+1)*n_atoms].
-    fn execute_bfs<F>(&self, mut f: F) where F: FnMut(&[Value]) {
+    pub fn execute_bfs<F>(&self, mut f: F) where F: FnMut(&[Value]) {
         let n_vars = self.levels.len();
         if n_vars == 0 { // mirror execute_dfs's empty-query case.
             f(&[]);
@@ -604,124 +564,18 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
     }
 }
 
-
-// ---------- BENCHMARKS ----------
-fn main() {
-    let datasets: Vec<&'static str> = vec![
-        "ca-GrQc.txt",          // 14k undirected edges -> 48k undirected triangles
-        "wiki-Vote.txt",        // 100k -> 600k
-        "email-Enron.txt",      // 184k -> 700k
-        "soc-Slashdot0811.txt", // 470k -> 550k
-        "cit-HepTh.txt",        // 350k -> 1.5m
-        "soc-Epinions1.txt",    // 400k -> 1.6m
-        // "twitter_combined.txt", // 1.3m -> 13m          ~2s to run
-        // "soc-LiveJournal1.txt", // 43m  -> 285m         ~2min to run!
-    ];
 
-    // With FxHash, WCO underperforms non-WCO on these (except LiveJournal1).
-    // With SipHash (Rust default), it beats non-WCO except on ca-GrQc.
-    // So they're competitive, but the non-WCO does more hash probes.
-    println!("========== UNDIRECTED TRIANGLE BENCHMARKS ==========");
-    for &name in &datasets {
-        tests::snap_triangles_undirected(name, None);
-    }
-
-    // // These mostly, but not always, generate many more results. NB. each directed
-    // // triangle is counted 3x (for its 3 rotations), except for self-triangles (x->x->x).
-    // println!("========== DIRECTED TRIANGLE BENCHMARKS ==========");
-    // for &name in &datasets {
-    //     tests::snap_triangles_directed(name, None);
-    // }
-}
-
-
-// ============================================================================
-// ========= TESTS, BENCHMARKS, & HELPERS (mostly claude-generated)  ==========
-// ============================================================================
+// ---------- UNIT TESTS: Trie::build across all IndexColumnShape kinds. ----------
 //
-// Run the tests with:
-//
-//     cargo test --example join-v2
-//     cargo test --example join-v2 -- --nocapture   # to see the SNAP timing output
-//
-// Since query planning / variable-order selection don't exist yet, each test
-// hand-builds the trie indexes and the `QueryPlan` (indexes + levels) that a
-// planner would eventually produce, then checks `Trie::build` and
-// `QueryPlan::execute_dfs` against a brute-force computation over small data.
-#[allow(unused_imports)]
+// These poke at the trie's representation directly, so they live here rather than in the
+// integration tests. Exercises: multi-level tries, a non-identity permutation shape, the
+// EqColumn filter (R(x,x)), empty results (-> None), and the zero-level EqConst path
+// (-> Some(Leaf) / None).
+#[cfg(test)]
 mod tests {
+    use super::IndexColumnShape::{EqColumn, EqConst, TrieLevel};
     use super::*;
-    use super::IndexColumnShape::{TrieLevel, EqColumn, EqConst};
-    use std::collections::{HashMap, HashSet};
-
-    // ---- Loading SNAP graph datasets ----
-    fn load_edges_from<R: std::io::Read>(source: R, max_edges: Option<usize>) -> Vec<(usize, usize)> {
-        if let Some(n) = max_edges {
-            print_flush!("Reading at most {n} edges.");
-        } else {
-            print_flush!("Reading all edges.");
-        }
-        use std::io::{BufRead, BufReader};
-        let file = BufReader::new(source);
-        let mut edges: Vec<(usize, usize)> = Vec::new();
-        for readline in file.lines() {
-            if max_edges.is_some_and(|n| n <= edges.len()) { break }
-            let line = readline.expect("read error");
-            if line.is_empty() { continue }
-            if line.starts_with('#') { continue }
-            let mut elts = line[..].split_whitespace();
-            let v: usize = elts.next().unwrap().parse().expect("malformed src");
-            let u: usize = elts.next().unwrap().parse().expect("malformed dst");
-            edges.push((v,u));
-        }
-        print_flush!(" Got {} edges", edges.len());
-        if edges.is_sorted() {
-            print_flush!(", already sorted.");
-        } else {
-            print_flush!(", sorting...");
-            edges.sort_unstable();
-            print_flush!(" done.");
-        }
-        // Get rid of dupes. This ensures our trie-based WCOJs (which dedup implicitly) will
-        // produce the same # of results as any other approach (which might not).
-        print_flush!(" Deduping...");
-        let before = edges.len();
-        edges.dedup();
-        if edges.len() == before {
-            println!(" no dupes.");
-        } else {
-            println!(" deduped {} -> {}.", before, edges.len());
-        }
-        edges
-    }
-
-    // ---- A trivial in-memory Database backed by Vecs. ----
-    struct VecDb {
-        // name -> (arity, rows)
-        rels: HashMap<&'static str, (usize, Vec<Vec<Value>>)>,
-    }
-
-    impl VecDb {
-        fn new() -> Self { VecDb { rels: HashMap::new() } }
-
-        // Builder-style: add a relation. Panics if a row's width != arity.
-        fn rel(mut self, name: &'static str, arity: usize, rows: Vec<Vec<Value>>) -> Self {
-            for row in &rows { assert_eq!(row.len(), arity, "bad row width in {name}"); }
-            self.rels.insert(name, (arity, rows));
-            self
-        }
-    }
-
-    impl Database for VecDb {
-        type RelId = &'static str;
-        fn arity(&self, r: &'static str) -> usize { self.rels[r].0 }
-        fn count(&self, r: &'static str) -> usize { self.rels[r].1.len() }
-        fn rows(&self, r: &'static str) -> impl Iterator<Item = &[Value]> {
-            self.rels[r].1.iter().map(|row| row.as_slice())
-        }
-    }
-
-    // ---- Small helpers. ----
+    use crate::vec_db::VecDb;
 
     // Sorted keys of a trie node's map.
     fn keys(node: &Trie) -> Vec<Value> {
@@ -741,44 +595,6 @@ mod tests {
 
     fn is_leaf(node: &Trie) -> bool { matches!(node, Trie::Leaf) }
 
-    // Run a plan and return its output rows in sorted order.
-    fn run_plan(plan: &QueryPlan) -> Vec<Vec<Value>> {
-        let mut out: Vec<Vec<Value>> = Vec::new();
-        let mut counter: usize = 0;
-        plan.execute_dfs(|row| {
-            out.push(row.to_vec());
-            counter += 1;
-            if counter.is_multiple_of(1_000_000) {
-                println!("found {:2} million results!", counter / 1_000_000);
-            }
-        });
-        normalize(out)
-    }
-
-    // Like run_plan, but executes breadth-first. Kept separate so the SNAP benchmark can
-    // time DFS and BFS on the same plan and compare.
-    fn run_plan_bfs(plan: &QueryPlan) -> Vec<Vec<Value>> {
-        let mut out: Vec<Vec<Value>> = Vec::new();
-        plan.execute_bfs(|row| out.push(row.to_vec()));
-        normalize(out)
-    }
-
-    fn normalize(mut v: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
-        v.sort_unstable();
-        v
-    }
-
-    // Build a Database with a single binary relation "E" from an edge list.
-    fn edge_db(edges: &[(Value, Value)]) -> VecDb {
-        let rows: Vec<Vec<Value>> = edges.iter().map(|&(a, b)| vec![a, b]).collect();
-        VecDb::new().rel("E", 2, rows)
-    }
-
-    // ---- Test 1: Trie::build across all IndexColumnShape kinds. ----
-    //
-    // Exercises: multi-level tries, a non-identity permutation shape, the
-    // EqColumn filter (R(x,x)), empty results (-> None), and the zero-level
-    // EqConst path (-> Some(Leaf) / None).
     #[test]
     fn test_trie_build() {
         let db = VecDb::new()
@@ -815,311 +631,5 @@ mod tests {
             other => panic!("T(5) should build Some(Leaf), got {:?}", other.is_some()),
         }
         assert!(Trie::build(&db, "T", &vec![EqConst(9)]).is_none());
-    }
-
-    // ---- Test 2: triangle query E(x,y) E(y,z) E(z,x), order x,y,z. ----
-    //
-    // This is the worked example in the QueryPlan doc comment: the canonical
-    // worst-case-optimal-join workload. Checked against a brute-force scan.
-    #[test]
-    fn test_triangle_query() {
-        let edges: Vec<(Value, Value)> = vec![
-            (0, 1), (1, 2), (2, 0),   // a directed 3-cycle
-            (0, 2), (2, 1), (1, 0),   // and its reverse
-            (1, 3), (3, 1),           // extra edges, not in any triangle here
-        ];
-        let db = edge_db(&edges);
-        // fwd = E indexed (source, dest); bwd = E indexed (dest, source). Rewritten
-        // atoms: fwd(x,y) fwd(y,z) bwd(x,z).
-        let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
-        let bwd = Trie::build(&db, "E", &vec![TrieLevel(1), TrieLevel(0)]).unwrap();
-        let plan = QueryPlan {
-            tries: vec![&fwd, &fwd, &bwd],
-            levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
-        };
-        let got = run_plan(&plan);
-        let want = binary_triangles_directed(&edges);
-
-        assert!(!want.is_empty(), "test data should contain triangles");
-        assert_eq!(got, want, "triangle join mismatch");
-    }
-
-    // The directed triangle query E(x,y) E(y,z) E(z,x), via a binary join for E(x,y) E(y,z)
-    // followed by a hash-filter on E(z,x), then sorted. Used to cross-check the WCOJ plan,
-    // both in the unit test above and in the SNAP benchmark below.
-    fn binary_triangles_directed(edges: &[(Value, Value)]) -> Vec<Vec<Value>> {
-        let edge_set: Set<(Value, Value)> = edges.iter().copied().collect();
-        let mut out: Map<Value, Vec<Value>> = Map::default();
-        for &(a, b) in edges { out.entry(a).or_default().push(b); }
-        let mut want: Vec<Vec<Value>> = Vec::new();
-        for &(x, y) in edges {
-            if let Some(zs) = out.get(&y) {
-                for &z in zs {
-                    if edge_set.contains(&(z, x)) { want.push(vec![x, y, z]); }
-                }
-            }
-        }
-        normalize(want)
-    }
-
-    // Normalize an edge list into an undirected simple graph oriented low -> high: reorient
-    // every edge so src < dst, drop self-loops, then sort & dedup. In the result every edge
-    // (a, b) has a < b, so an undirected triangle {a < b < c} appears uniquely as the three
-    // edges a->b, b->c, a->c — which is what lets the query below count each triangle once.
-    fn to_low_high(edges: &[(Value, Value)]) -> Vec<(Value, Value)> {
-        let mut v: Vec<(Value, Value)> = edges.iter()
-            .filter(|&&(a, b)| a != b)
-            .map(|&(a, b)| if a < b { (a, b) } else { (b, a) })
-            .collect();
-        v.sort_unstable();
-        v.dedup();
-        v
-    }
-
-    // Finds undirected triangles over a low->high edge list: all {a < b < c} with edges
-    // a->b, b->c, a->c. Uses a binary join; sorts results.
-    fn binary_triangles_undirected(edges: &[(Value, Value)]) -> Vec<Vec<Value>> {
-        let edge_set: Set<(Value, Value)> = edges.iter().copied().collect();
-        let mut out: Map<Value, Vec<Value>> = Map::default();
-        for &(a, b) in edges { out.entry(a).or_default().push(b); }
-        let mut want: Vec<Vec<Value>> = Vec::new();
-        for &(a, b) in edges {
-            if let Some(cs) = out.get(&b) {
-                for &c in cs {
-                    if edge_set.contains(&(a, c)) { want.push(vec![a, b, c]); }
-                }
-            }
-        }
-        normalize(want)
-    }
-
-    // ---- Test 3: two-atom path query E(x,y) E(y,z), order x,y,z. ----
-    //
-    // A trie shared by two atom-entries (both use `fwd`), so it exercises the
-    // save/restore of a trie that participates in multiple levels.
-    #[test]
-    fn test_path_query() {
-        let edges: Vec<(Value, Value)> = vec![
-            (0, 1), (1, 2), (1, 3), (2, 3), (3, 0),
-        ];
-        let db = edge_db(&edges);
-        let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
-
-        // levels: x <- entry0; y <- entry0 ∩ entry1; z <- entry1.
-        let plan = QueryPlan {
-            tries: vec![&fwd, &fwd],
-            levels: vec![vec![0], vec![0, 1], vec![1]],
-        };
-        let got = run_plan(&plan);
-
-        let mut want: Vec<Vec<Value>> = Vec::new();
-        for &(x, y) in &edges {
-            for &(y2, z) in &edges {
-                if y2 == y { want.push(vec![x, y, z]); }
-            }
-        }
-        let want = normalize(want);
-
-        assert!(!want.is_empty(), "test data should contain 2-paths");
-        assert_eq!(got, want, "path join mismatch");
-    }
-
-    // ---- Test 4: single self-join atom R(x,x), order x. ----
-    //
-    // Exercises the EqColumn trie inside execute_dfs (a depth-1 join whose only
-    // trie came from a variable-reuse shape).
-    #[test]
-    fn test_self_loop_query() {
-        let db = VecDb::new().rel(
-            "R", 2,
-            vec![vec![0, 0], vec![1, 1], vec![2, 3], vec![4, 4], vec![5, 6]],
-        );
-        let diag = Trie::build(&db, "R", &vec![TrieLevel(0), EqColumn(0)]).unwrap();
-        let plan = QueryPlan { tries: vec![&diag], levels: vec![vec![0]] };
-        let got = run_plan(&plan);
-        assert_eq!(got, vec![vec![0], vec![1], vec![4]], "self-loop mismatch");
-    }
-
-    #[test]
-    fn test_undirected_triangle_query() {
-        // Raw edges with mixed orientation, a self-loop, and a duplicate — all normalized away.
-        let raw: Vec<(Value, Value)> = vec![
-            (1, 0), (1, 2), (2, 0),   // triangle {0,1,2}
-            (0, 3), (3, 4), (4, 0),   // triangle {0,3,4}
-            (2, 2),                   // self-loop -> dropped
-            (0, 1),                   // duplicate of (1,0) after reorientation
-        ];
-        let edges = to_low_high(&raw);
-        assert_eq!(edges, vec![(0,1),(0,2),(0,3),(0,4),(1,2),(3,4)]);
-
-        let db = edge_db(&edges);
-        let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
-        let plan = QueryPlan {
-            tries: vec![&fwd, &fwd, &fwd],
-            levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
-        };
-        let got = run_plan(&plan);
-        let want = binary_triangles_undirected(&edges);
-        assert_eq!(got, want, "undirected join vs brute force");
-        assert_eq!(got, vec![vec![0, 1, 2], vec![0, 3, 4]], "expected exactly two triangles");
-    }
-
-    // ---- Test 7: execute_bfs matches execute_dfs. ----
-    //
-    // The breadth-first executor should compute exactly the same result set as the
-    // depth-first one on every plan. Cross-check on the triangle query (shared + swapped
-    // tries), the path query (a trie shared across two levels), the self-loop query
-    // (a depth-1 EqColumn trie), and the empty-query edge case.
-    #[test]
-    fn test_bfs_matches_dfs() {
-        // Directed-triangle setup from test 2.
-        let edges: Vec<(Value, Value)> = vec![
-            (0, 1), (1, 2), (2, 0), (0, 2), (2, 1), (1, 0), (1, 3), (3, 1),
-        ];
-        let db = edge_db(&edges);
-        let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
-        let bwd = Trie::build(&db, "E", &vec![TrieLevel(1), TrieLevel(0)]).unwrap();
-        let tri = QueryPlan {
-            tries: vec![&fwd, &fwd, &bwd],
-            levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
-        };
-
-        // Path query from test 3 (a single trie shared across two levels).
-        let pedges: Vec<(Value, Value)> = vec![(0, 1), (1, 2), (1, 3), (2, 3), (3, 0)];
-        let pdb = edge_db(&pedges);
-        let pfwd = Trie::build(&pdb, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
-        let path = QueryPlan { tries: vec![&pfwd, &pfwd], levels: vec![vec![0], vec![0, 1], vec![1]] };
-
-        // Self-loop query from test 4 (a depth-1 EqColumn trie).
-        let sdb = VecDb::new().rel(
-            "R", 2, vec![vec![0, 0], vec![1, 1], vec![2, 3], vec![4, 4], vec![5, 6]],
-        );
-        let diag = Trie::build(&sdb, "R", &vec![TrieLevel(0), EqColumn(0)]).unwrap();
-        let loop_ = QueryPlan { tries: vec![&diag], levels: vec![vec![0]] };
-
-        // Empty query (no variables): both should yield exactly one empty tuple.
-        let empty = QueryPlan { tries: vec![], levels: vec![] };
-
-        for plan in [&tri, &path, &loop_, &empty] {
-            let mut dfs: Vec<Vec<Value>> = Vec::new();
-            plan.execute_dfs(|row| dfs.push(row.to_vec()));
-            let mut bfs: Vec<Vec<Value>> = Vec::new();
-            plan.execute_bfs(|row| bfs.push(row.to_vec()));
-            assert_eq!(normalize(dfs), normalize(bfs), "bfs and dfs disagree");
-        }
-    }
-
-    fn snap_load(dataset: &str, max_edges: Option<usize>) -> Vec<(usize, usize)> {
-        use std::fs::File;
-        let path = format!("{}/data/{dataset}", env!("CARGO_MANIFEST_DIR"));
-        let file = File::open(&path).expect("could not open data file");
-        println!("{dataset}: loading from {path}");
-        // load_edges_from already sorts.
-        load_edges_from(file, max_edges)
-    }
-
-    // ---- Test 5: triangle query on a real SNAP dataset. ----
-    //
-    // Loads (a prefix of) the named dataset from data/ and runs the same triangle query
-    // as test 2, cross-checked against brute force. `max_edges` caps how much of the file
-    // we read so we can start small and scale up; None means "the whole file". The crate
-    // directory is resolved at compile time, so it works regardless of the working
-    // directory; a missing file panics (these are called from main, not run as #[test]s).
-    pub fn snap_triangles_directed(dataset: &str, max_edges: Option<usize>) {
-        let edges = snap_load(dataset, max_edges);
-        let db = edge_db(&edges);
-
-        // WCOJ phase 1: build the trie indexes.
-        let wcoj_start = Instant::now();
-        let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
-        let bwd = Trie::build(&db, "E", &vec![TrieLevel(1), TrieLevel(0)]).unwrap();
-        let build_time = wcoj_start.elapsed();
-
-        // WCOJ phase 2: execute the join, materializing + sorting the results just like the
-        // brute force does, so the two are compared on equal terms.
-        let plan = QueryPlan {
-            tries: vec![&fwd, &fwd, &bwd],
-            levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
-        };
-        let t = Instant::now();
-        let got = run_plan(&plan);
-        let exec_time = t.elapsed();
-        let total_time = wcoj_start.elapsed();
-
-        let t = Instant::now();
-        let want = binary_triangles_directed(&edges);
-        let brute_time = t.elapsed();
-
-        println!(
-            "{dataset}: {} undirected edges -> {} triangles
-  wcoj build    {:>9.2?}
-  wcoj execute  {:>9.2?}
-  wcoj total    {:>9.2?}    found {:8} triangles
-  2-edge-filter {:>9.2?}    found {:8} triangles
-",
-            edges.len(), got.len(),
-            build_time,
-            exec_time,
-            total_time, got.len(),
-            brute_time, want.len(),
-        );
-
-        // There are too many triangles to print on mismatch, so just compare counts first
-        // (a nicer message than a full set diff) and then the full sets.
-        assert_eq!(got.len(), want.len(), "triangle count mismatch");
-        assert!(got == want, "triangle set mismatch");
-    }
-
-    // ---- Test 6: undirected triangle count (matches SNAP's published figures). ----
-    //
-    // Reorient edges low->high and dedup, so each undirected triangle {a<b<c} shows up as
-    // a->b, b->c, a->c exactly once. The query is therefore E(x,y) E(y,z) E(x,z) (note the
-    // last atom, vs E(z,x) for directed 3-cycles), order x,y,z.
-    pub fn snap_triangles_undirected(dataset: &str, max_edges: Option<usize>) {
-        let raw = snap_load(dataset, max_edges);
-        let edges = to_low_high(&raw);
-        let db = edge_db(&edges);
-
-        let wcoj_start = Instant::now();
-        let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
-        let build_time = wcoj_start.elapsed();
-
-        let plan = QueryPlan {
-            tries: vec![&fwd, &fwd, &fwd],
-            levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
-        };
-        let t = Instant::now();
-        let got = run_plan(&plan);
-        let exec_time = t.elapsed();
-        let total_time = wcoj_start.elapsed();
-
-        // Same plan, breadth-first, so we can compare the two execution strategies.
-        let t = Instant::now();
-        let got_bfs = run_plan_bfs(&plan);
-        let bfs_time = t.elapsed();
-
-        let t = Instant::now();
-        let want = binary_triangles_undirected(&edges);
-        let brute_time = t.elapsed();
-
-        println!(
-            "{dataset}: {} undirected edges -> {} triangles
-  wcoj build    {:>9.2?}
-  wcoj exec dfs {:>9.2?}    found {:8} triangles
-  wcoj exec bfs {:>9.2?}    found {:8} triangles
-  wcoj total    {:>9.2?}    (build + dfs)
-  2-edge-filter {:>9.2?}    found {:8} triangles
-",
-            edges.len(), got.len(),
-            build_time,
-            exec_time, got.len(),
-            bfs_time, got_bfs.len(),
-            total_time,
-            brute_time, want.len(),
-        );
-
-        assert_eq!(got.len(), want.len(), "undirected triangle count mismatch");
-        assert!(got == want, "undirected triangle set mismatch");
-        assert!(got == got_bfs, "bfs vs dfs triangle set mismatch");
     }
 }

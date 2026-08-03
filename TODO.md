@@ -1,16 +1,22 @@
 # NOTES
 
-Main file being developed right now is `examples/join-v2.rs`.
+Build;
 
-To run tests,
+    cargo build --all
 
-    cargo test --example join-v2
+Tests:
 
-To run benchmark (ie `main` from join-v2.rs):
+    cargo test
 
-    cargo run --release --example join-v2
+Benchmarks (remember use use `--release`):
 
-Use `--release` or else it will be slow.
+    cargo run --release --example triangles
+
+You'll need to download some SNAP datasets first:
+
+    ./download_snap_datasets.sh
+
+This can be slow depending on your network connection.
 
 # TODOs
 
