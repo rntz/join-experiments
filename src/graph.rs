@@ -4,6 +4,13 @@ use std::fs::File;
 use crate::hash::{Map, Set};
 use crate::join::Value;
 use crate::print_flush;
+use crate::vec_db::VecDb;
+
+// Build a Database with a single binary relation "E" from an edge list.
+pub fn edge_db(edges: &[(Value, Value)]) -> VecDb {
+    let rows: Vec<Vec<Value>> = edges.iter().map(|&(a, b)| vec![a, b]).collect();
+    VecDb::new().rel("E", 2, rows)
+}
 
 // Load (a prefix of) a named dataset from data/, in sorted order. The crate directory is
 // resolved at compile time, so it works regardless of the working directory. A missing

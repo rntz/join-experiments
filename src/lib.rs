@@ -18,11 +18,8 @@ pub mod hash;
 pub mod join;
 pub mod vec_db;
 
-pub use hash::{FxBuildHasher, FxHasher, HashBuilder, Map, Set};
-pub use join::{
-    Atom, Database, IndexColumnShape, IndexShape, Query, QueryPlan, Trie, TrieMap, Value,
-};
-pub use vec_db::{edge_db, VecDb};
+pub use join::{IndexColumnShape, QueryPlan, Trie, Value};
+pub use vec_db::VecDb;
 pub use graph::{
-    binary_triangles_directed, binary_triangles_undirected, load_edges_from, snap_load, to_low_high,
+    binary_triangles_directed, binary_triangles_undirected, edge_db, snap_load, to_low_high,
 };

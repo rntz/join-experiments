@@ -35,9 +35,3 @@ impl Database for VecDb {
         self.rels[r].1.iter().map(|row| row.as_slice())
     }
 }
-
-// Build a Database with a single binary relation "E" from an edge list.
-pub fn edge_db(edges: &[(Value, Value)]) -> VecDb {
-    let rows: Vec<Vec<Value>> = edges.iter().map(|&(a, b)| vec![a, b]).collect();
-    VecDb::new().rel("E", 2, rows)
-}
