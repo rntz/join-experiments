@@ -18,9 +18,9 @@ fn main() {
         "ca-GrQc.txt",          // 14k undirected edges -> 48k undirected triangles
         "wiki-Vote.txt",        // 100k -> 600k
         "email-Enron.txt",      // 184k -> 700k
-        "soc-Slashdot0811.txt", // 470k -> 550k
+        // "soc-Slashdot0811.txt", // 470k -> 550k
         "cit-HepTh.txt",        // 350k -> 1.5m
-        "soc-Epinions1.txt",    // 400k -> 1.6m
+        // "soc-Epinions1.txt",    // 400k -> 1.6m
         // "twitter_combined.txt", // 1.3m -> 13m          ~2s to run
         // "soc-LiveJournal1.txt", // 43m  -> 285m         ~2min to run!
     ];
