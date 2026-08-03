@@ -61,16 +61,16 @@ pub fn binary_triangles_directed(edges: &[(Value, Value)]) -> Vec<Vec<Value>> {
     let edge_set: Set<(Value, Value)> = edges.iter().copied().collect();
     let mut out: Map<Value, Vec<Value>> = Map::default();
     for &(a, b) in edges { out.entry(a).or_default().push(b); }
-    let mut want: Vec<Vec<Value>> = Vec::new();
+    let mut triangles: Vec<Vec<Value>> = Vec::new();
     for &(x, y) in edges {
         if let Some(zs) = out.get(&y) {
             for &z in zs {
-                if edge_set.contains(&(z, x)) { want.push(vec![x, y, z]); }
+                if edge_set.contains(&(z, x)) { triangles.push(vec![x, y, z]); }
             }
         }
     }
-    want.sort_unstable();
-    want
+    triangles.sort_unstable();
+    triangles
 }
 
 // Normalize an edge list into an undirected simple graph where edges are stored oriented
@@ -92,14 +92,14 @@ pub fn binary_triangles_undirected(edges: &[(Value, Value)]) -> Vec<Vec<Value>> 
     let edge_set: Set<(Value, Value)> = edges.iter().copied().collect();
     let mut out: Map<Value, Vec<Value>> = Map::default();
     for &(a, b) in edges { out.entry(a).or_default().push(b); }
-    let mut want: Vec<Vec<Value>> = Vec::new();
+    let mut triangles: Vec<Vec<Value>> = Vec::new();
     for &(a, b) in edges {
         if let Some(cs) = out.get(&b) {
             for &c in cs {
-                if edge_set.contains(&(a, c)) { want.push(vec![a, b, c]); }
+                if edge_set.contains(&(a, c)) { triangles.push(vec![a, b, c]); }
             }
         }
     }
-    want.sort_unstable();
-    want
+    triangles.sort_unstable();
+    triangles
 }
