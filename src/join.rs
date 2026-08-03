@@ -335,11 +335,8 @@ pub struct QueryPlan<'a> {
 
 impl<'a> QueryPlan<'a> {
     // Execute via depth-first backtracking.
-    pub fn execute_dfs<F>(&self, mut f: F) where F: FnMut(&[Value]) {
-        if self.levels.is_empty() { // TODO: add a test for this case.
-            f(&[]);
-            return;
-        }
+    pub fn execute_dfs<F>(&self, f: F) where F: FnMut(&[Value]) {
+        // TODO: add a 0-level query test case.
         let empty = Map::default();
         QueryDfsState {
             tries: self.tries.iter().map(|&t| match t {
@@ -390,6 +387,10 @@ struct QueryDfsState<'a, F> {
 
 impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
     fn execute(&mut self, level_idx: usize) {
+        if level_idx == self.levels.len() {
+            (self.callback)(&self.prefix);
+            return;
+        }
         let level: &Vec<usize> = &self.levels[level_idx];
         // Snapshot the current node of each trie in this level onto the `saved` stack so we
         // can restore them when we're done; `mark` is where this level's slice begins.
@@ -415,19 +416,13 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
                 }
             }
 
-            // We've found a match! Report it if done, or recurse to continue solving.
+            // We've found a match! Write the children into `self.tries` and recurse.
             self.prefix.push(*key);
-            let next_level = level_idx + 1;
-            if next_level == self.levels.len() {
-                (self.callback)(&self.prefix);
-            } else {
-                // Write the children into `self.tries` and recurse. A Leaf child bottoms out
-                // here and is never read again, so we skip it.
-                for (pos, &trie_idx) in level.iter().enumerate() {
-                    if let Trie::Node(map) = self.children[pos] { self.tries[trie_idx] = map; }
-                }
-                self.execute(next_level);
+            for (pos, &trie_idx) in level.iter().enumerate() {
+                // A Leaf child bottoms out here and is never read again, so we skip it.
+                if let Trie::Node(map) = self.children[pos] { self.tries[trie_idx] = map; }
             }
+            self.execute(level_idx + 1);
             let popped = self.prefix.pop();
             debug_assert!(popped == Some(*key));
         }
