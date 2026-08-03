@@ -22,14 +22,14 @@ This can be slow depending on your network connection.
 
 - computational atoms: computing functions on attribute values
 - aggregations
+- tensors??
 - mutation & incremental maintenance over it
 
 # Pieces of joins I haven't implemented yet
 
 - interning!
 - constants in queries!
-- variable orders!
-- deriving indexes & query plan given a variable order!
+- picking a variable order!
 
 # Nice to haves I haven't implemented yet
 
