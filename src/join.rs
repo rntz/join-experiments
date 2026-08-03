@@ -6,8 +6,13 @@ use crate::hash::Map;
 // ---------- NEXT THINGS TO IMPLEMENT ----------
 //
 // 0. Pick a variable order in a vaguely reasonable way.
-// 0. Construct indexes given a query and a variable order.
+//    heuristics to start with:
+//    - join keys first
+//    - connectedness (pick keys that are constrained by previous ones)
+//    I think I built something like this in Racket once? go rummage around for it.
+//
 // 0. Computational atoms?
+//
 // 0. Representing & chasing FDs.
 
 // ---------- STEPS FOR EXECUTING A QUERY ----------
@@ -45,7 +50,7 @@ use crate::hash::Map;
 // 4. Use these stats (& FDs once we have them) to pick a variable order.
 //
 // 5. Build trie indexes on each relation based on the query & var order.
-//    DONE, see Query::plan, PlannedQuery::build_indexes below
+//    DONE, see Query::plan, PlannedQuery::{build_indexes, bind}
 //
 // 6. Execute query using the indexes.
 //    DONE: see ExecutableQuery::execute_dfs
