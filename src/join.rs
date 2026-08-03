@@ -1,4 +1,5 @@
 use std::hash::Hash;
+use std::collections::HashMap;
 
 use crate::hash::Map;
 
@@ -44,13 +45,11 @@ use crate::hash::Map;
 // 4. Use these stats (& FDs once we have them) to pick a variable order.
 //
 // 5. Build trie indexes on each relation based on the query & var order.
-//    DONE: have Trie::build to build a single index.
-//    TODO: derive which indexes to build based on a query & variable order,
-//    shove them in a struct.
+//    DONE, see Query::plan, PlannedQuery::build_indexes below
 //
 // 6. Execute query using the indexes.
-//    DONE: see QueryPlan::execute_dfs
-//    TODO: a breadth-first version?
+//    DONE: see ExecutableQuery::execute_dfs
+//    there's also a tentative bfs version in join_bfs.rs.
 //
 // 7. Decode the results by de-interning everything.
 
@@ -181,7 +180,7 @@ pub type TrieMap = Map<Value, Trie>;
 // the relation.
 
 pub type IndexShape = Vec<IndexColumnShape>; // length = arity of relation
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IndexColumnShape {
     // what to do with column i.
     TrieLevel(usize), // TrieLevel(k) => becomes trie level k.
@@ -287,28 +286,141 @@ impl Trie {
 
 // ---------- ON TRIE INDEX SHARING ----------
 //
-// For now, we only re-use trie indexes when they have the same IndexShape. For instance,
-// if the variable order is x,y,z then the atoms R(x,y), R(y,z), R(x,z) use the same
-// index, but R(y,x) will need a different one.
+// For now, we only re-use trie indexes when they have the same relation & IndexShape. For
+// instance, if the variable order is x,y,z then the atoms R(x,y), R(y,z), R(x,z) use the
+// same index, but R(y,x) will need a different one.
 //
 // In principle we can do more interesting re-use, for instance, R(x,y) and R(2,x) and
 // R(x,x) can use the same index. It is more obvious how to do this using the "alternative
 // approach" of desugaring constants and variable re-use into separate atoms.
 
 
-// ---------- WCOJ QUERY PLANS ----------
-pub struct QueryPlan<'a> {
-    // TODO: rewrite to Vec<Option<&'a Trie>> because indexes can be empty. in this case
-    // there are no query results; we should handle this in QueryPlan::execute_dfs().
+// ---------- QUERY PLANNING ----------
+//
+// Given a Query and a variable order, PlannedQuery::plan derives the trie indexes each
+// atom needs (as (relation, IndexShape) pairs) plus the per-variable `levels` structure
+// that drives execution. This is the *logical* plan: it names the indexes but doesn't
+// build them. `build_indexes` materializes them against a Database, and `bind` binds them
+// into an ExecutableQuery.
+//
+// The core rule: within an atom, its trie levels are its distinct variables sorted by
+// their position in the global variable order. This makes each atom's trie descend in
+// lock-step with the global binding order, which is exactly what execute_dfs assumes.
+pub struct PlannedQuery<RelId> {
+    // One entry per atom, in atom order: atoms[a] = (relation, index shape) for atom a.
+    // Atoms that need the same index have equal (RelId, IndexShape) entries; that sharing
+    // is realized by build_indexes, which dedups on this key.
+    pub atoms: Vec<(RelId, IndexShape)>,
+    // levels[i] lists the atoms whose trie descends one level when binding the i'th
+    // variable of the order. Entries are indices into `atoms`, and line up with
+    // ExecutableQuery::tries (also atom-order). See ExecutableQuery for the full story.
+    pub levels: Vec<Vec<usize>>,
+}
+
+// The built trie indexes, keyed by (relation, shape) so shared indexes are stored once. A
+// None value means the index is empty (no rows survived its filters).
+//
+// Keying on (RelId, IndexShape) makes this self-describing when debug-printed and makes
+// index sharing fall out for free: two atoms with the same key hit the same entry.
+pub type Indexes<RelId> = HashMap<(RelId, IndexShape), Option<Trie>>;
+
+impl<Db: Database, Var: Eq + Hash + Copy> Query<Db, Var> {
+    // Derive a PlannedQuery for a given variable order. `order` must list every variable
+    // used by an atom, without repeats. Execution binds variables — and emits result
+    // columns — in `order` order.
+    pub fn plan(&self, order: &[Var]) -> PlannedQuery<Db::RelId> {
+        use IndexColumnShape::{EqColumn, TrieLevel};
+
+        // order_pos[v] = position of variable v in the global variable order.
+        let order_pos: Map<Var, usize> =
+            order.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+        assert_eq!(order_pos.len(), order.len(), "variable order repeats a variable");
+
+        let mut atoms: Vec<(Db::RelId, IndexShape)> = Vec::with_capacity(self.atoms.len());
+        let mut levels: Vec<Vec<usize>> = vec![Vec::new(); order.len()];
+
+        for (a, atom) in self.atoms.iter().enumerate() {
+            // first_col[v] = the first column of this atom where variable v appears
+            // (or_insert keeps the earliest column). `distinct` is its key set; its order
+            // doesn't matter — we sort it for levels and otherwise treat it as a set.
+            let mut first_col: Map<Var, usize> = Map::default();
+            for (col, &v) in atom.vars.iter().enumerate() {
+                first_col.entry(v).or_insert(col);
+            }
+            let distinct: Vec<Var> = first_col.keys().copied().collect();
+
+            // Assign each distinct variable a trie level: its rank among this atom's
+            // variables when sorted by global order position. This is what keeps the atom's
+            // trie aligned with the global binding order.
+            let mut by_order = distinct.clone();
+            by_order.sort_by_key(|v| {
+                *order_pos.get(v).expect("every atom variable must appear in the variable order")
+            });
+            let level_of: Map<Var, usize> =
+                by_order.iter().enumerate().map(|(lvl, &v)| (v, lvl)).collect();
+
+            // Build the shape column by column: a variable's first occurrence becomes a
+            // TrieLevel; a repeat becomes an EqColumn back-reference to its first column.
+            // (A constant would become EqConst here, once Atom can carry constants.)
+            let mut shape: IndexShape = Vec::with_capacity(atom.vars.len());
+            for (col, &v) in atom.vars.iter().enumerate() {
+                if first_col[&v] == col {
+                    shape.push(TrieLevel(level_of[&v]));
+                } else {
+                    shape.push(EqColumn(first_col[&v]));
+                }
+            }
+
+            // This atom binds each of its distinct variables' order positions.
+            for &v in &distinct { levels[order_pos[&v]].push(a); }
+            atoms.push((atom.relation.clone(), shape));
+        }
+
+        PlannedQuery { atoms, levels }
+    }
+}
+
+impl<RelId: Eq + Hash + Clone> PlannedQuery<RelId> {
+    // Materialize every distinct index against `db`.
+    pub fn build_indexes<Db: Database<RelId = RelId>>(&self, db: &Db) -> Indexes<RelId> {
+        let mut indexes: Indexes<RelId> = HashMap::new();
+        for (rel, shape) in &self.atoms {
+            indexes
+                .entry((rel.clone(), shape.clone()))
+                .or_insert_with(|| Trie::build(db, rel.clone(), shape));
+        }
+        indexes
+    }
+
+    // Bind the built indexes into an executable plan. Returns None if any atom's index is
+    // empty: a join is a conjunction, so one empty index means the whole query is empty.
+    //
+    // TODO: this means a query can be empty in two ways - either None here, or by
+    // yielding nothing in execute_dfs(). This is ugly from a consumer's point of view.
+    // Either unify these paths somehow or provide a way of running a query that papers
+    // over the difference.
+    pub fn bind<'a>(&self, indexes: &'a Indexes<RelId>) -> Option<ExecutableQuery<'a>> {
+        let mut tries: Vec<&'a Trie> = Vec::with_capacity(self.atoms.len());
+        for key in &self.atoms {
+            match indexes.get(key) {
+                Some(Some(trie)) => tries.push(trie),
+                Some(None) => return None, // empty index => empty query.
+                None => panic!("index not built for an atom; call build_indexes first"),
+            }
+        }
+        Some(ExecutableQuery { tries, levels: self.levels.clone() })
+    }
+}
+
+
+// ---------- QUERY EXECUTION ----------
+pub struct ExecutableQuery<'a> {
     pub tries: Vec<&'a Trie>, // one trie per atom.
     pub levels: Vec<Vec<usize>>,  // one level per variable
     // Some of the trie pointers may be identical if atoms share indexes.
 }
 
-// A QueryPlan has one `tries` entry for each atom in the query and one level for each
-// variable. The index entries may happen to be duplicates of the same index; that's
-// deliberate: when we execute the plan, we're going to maintain some distinct mutable
-// state corresponding to each entry.
+// A ExecutableQuery has one trie pointer per atom and one level per variable.
 //
 // levels[i]: bounds for variable i.
 // levels[i][j]: the trie which we should use to bound this variable.
@@ -326,14 +438,14 @@ pub struct QueryPlan<'a> {
 //
 // Then this becomes:
 //
-//     QueryPlan {
+//     ExecutableQuery {
 //         tries: [&fwd, &fwd, &bwd],
 //         levels: [[0,2],      // x ← fwd    ∩ bwd    = {x : ∃y,z. E(x,y) ∧ E(z,x)}
 //                  [0,1],      // y ← fwd[x] ∩ fwd    = {y : E(x,y) ∧ ∃z. E(y,z)}
 //                  [1,2]],     // z ← fwd[y] ∩ bwd[x] = {z : E(y,z) ∧ E(z,x) }
 //     }
 
-impl<'a> QueryPlan<'a> {
+impl<'a> ExecutableQuery<'a> {
     // Execute via depth-first backtracking.
     pub fn execute_dfs<F>(&self, f: F) where F: FnMut(&[Value]) {
         // TODO: add a 0-level query test case.

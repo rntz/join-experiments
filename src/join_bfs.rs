@@ -1,9 +1,9 @@
 // Breadth-first search version of WCOJ execution, Claude-generated. Didn't outperform DFS
 // significantly so I'm not investigating further yet. I think it would need further
 // tweaking to incorporate the insights from DataToad; see "MICHAEL NOTES" below.
-use crate::join::{Value, QueryPlan, TrieMap, Trie};
+use crate::join::{Value, ExecutableQuery, TrieMap, Trie};
 
-impl<'a> QueryPlan<'a> {
+impl<'a> ExecutableQuery<'a> {
     // ======================================================================
     // BELOW IS CLAUDE-GENERATED CODE THAT I HAVE NOT REVIEWED YET - MICHAEL
     // ======================================================================

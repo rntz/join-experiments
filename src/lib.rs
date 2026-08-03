@@ -19,7 +19,9 @@ pub mod join;
 pub mod join_bfs;
 pub mod vec_db;
 
-pub use join::{IndexColumnShape, QueryPlan, Trie, Value};
+pub use join::{
+    Atom, Database, ExecutableQuery, IndexColumnShape, Indexes, PlannedQuery, Query, Trie, Value,
+};
 pub use vec_db::VecDb;
 pub use graph::{
     binary_triangles_directed, binary_triangles_undirected, edge_db, snap_load, to_low_high,

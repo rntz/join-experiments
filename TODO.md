@@ -38,15 +38,19 @@ This can be slow depending on your network connection.
 
 # TODOs
 
-- fix bug: Consider `E(x,y) T(5)`. The atom `T(5)` will build a depth-0 `Trie::Leaf` index
-  and hit the "unreachable!()" case in execute_dfs. Probably also true of _bfs.
-
+NOW DONE I THINK:
 - Problem: empty index -> can't even build a QueryPlan because we need Trie not
   Option<Trie>.
 
-- query planning: derive which trie indexes to build from a query + variable
-  order and bundle them into a struct. Right now callers hand-build each index
-  and QueryPlan by hand.
+- DONE: query planning: derive which trie indexes to build from a query + variable
+  order and bundle them into a struct. See Query::plan / PlannedQuery / Indexes in
+  src/join.rs. (Follow-up: the benchmark example still hand-builds its ExecutableQuery;
+  could be switched over to the planner. And constant atoms aren't wired into plan() yet.)
+
+NOT YET DONE:
+- regression test for previous bug: Consider `E(x,y) T(5)`. The atom `T(5)` will build a
+  depth-0 `Trie::Leaf` index and hit the "unreachable!()" case in execute_dfs. Probably
+  also true of _bfs.
 
 - FDs in the schema: figure out how to represent functional dependency info in
   the Database trait (e.g. per-relation primary keys), for FD chasing during
