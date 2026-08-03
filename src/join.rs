@@ -340,10 +340,14 @@ impl<'a> QueryPlan<'a> {
             f(&[]);
             return;
         }
+        let empty = Map::default();
         QueryDfsState {
             tries: self.tries.iter().map(|&t| match t {
                 Trie::Node(map) => map,
-                Trie::Leaf => unreachable!(), // FIXME XXX BUG! this fires for a depth-0 trie!
+                // We never read leaves but we need something to put here. We hit this
+                // case on a query with a fully-constant atom eg R(2) and also
+                // non-constant atoms eg T(x,y). TODO: test that hits this case.
+                Trie::Leaf => &empty,
             }).collect(),
             levels: &self.levels,
             prefix: Vec::with_capacity(self.levels.len()),
