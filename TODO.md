@@ -20,17 +20,11 @@ This can be slow depending on your network connection.
 
 # TODOs
 
-- implement 4-clique (K4) benchmark, should show a more significant speedup than
-  triangles compared with non-WCO join. Claude suggests comparing against a
-  2-step binary join plan: find triangles, then extend to 4-cliques.
+- fix bug: Consider `E(x,y) T(5)`. The atom `T(5)` will build a depth-0 `Trie::Leaf` index
+  and hit the "unreachable!()" case in execute_dfs. Probably also true of _bfs.
 
-- implement breadth-first version of execute_dfs().
-  check performance diff.
-
-- maybe: debug perf of execute_dfs() using callgrind?
-  would need to run it on Sully's AMD box.
-
-- compare performance of undirected triangle search to dijkstralog.
+- Problem: empty index -> can't even build a QueryPlan because we need Trie not
+  Option<Trie>.
 
 - query planning: derive which trie indexes to build from a query + variable
   order and bundle them into a struct. Right now callers hand-build each index
@@ -43,3 +37,14 @@ This can be slow depending on your network connection.
 - constants in atoms: decide how to represent constant arguments in Atom (e.g.
   R(x,2)). Trie::build already supports EqConst shapes; this is about the
   query-level representation.
+
+# TODOs for later
+
+- implement 4-clique (K4) benchmark, should show a more significant speedup than
+  triangles compared with non-WCO join. Claude suggests comparing against a
+  2-step binary join plan: find triangles, then extend to 4-cliques.
+
+- maybe: debug perf of execute_dfs() using callgrind?
+  would need to run it on Sully's AMD box.
+
+- compare performance of undirected triangle search to dijkstralog.
