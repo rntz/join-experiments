@@ -363,20 +363,14 @@ impl<'a> QueryPlan<'a> {
     }
 }
 
-// OBSERVATION: we trade back & forth between children & tries. children represents
-// "possible tries".
-//
-// TODO: instead of using children as a scratch buffer only, it could be made primary and
-// tries treated as a scratch buffer. and children could be Option<&'a Trie>, so it could
-// be our entry point, which would make handling failure (lack of any entries) easier.
 struct QueryDfsState<'a, F> {
     callback: F,
     levels: &'a Vec<Vec<usize>>,
     // Partial solution: prefix[i] = value of ith variable.
     prefix: Vec<Value>,
     // For each atom, the data of the node in the corresponding trie that we're currently
-    // at. (If this trie has bottomed-out at a Leaf, this will hold its parent - but it
-    // doesn't matter, we don't read leaves).
+    // at. (If the trie bottoms-out, it doesn't matter what we store here - we don't read
+    // Leafs.)
     tries: Vec<&'a TrieMap>,
     // Trie node stack. When entering a level we push the current node of each
     // trie in that level; on leaving we restore them.
