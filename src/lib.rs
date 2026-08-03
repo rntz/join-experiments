@@ -16,6 +16,7 @@ macro_rules! print_flush {
 pub mod graph;
 pub mod hash;
 pub mod join;
+pub mod join_bfs;
 pub mod vec_db;
 
 pub use join::{IndexColumnShape, QueryPlan, Trie, Value};
