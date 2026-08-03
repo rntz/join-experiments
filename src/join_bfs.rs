@@ -33,7 +33,7 @@ impl<'a> ExecutableQuery<'a> {
         let mut prefixes: Vec<Value> = Vec::new();
         let mut nodes: Vec<&TrieMap> = self.tries.iter().map(|&t| match t {
             Trie::Node(map) => map,
-            Trie::Leaf => unreachable!(),
+            Trie::Leaf => todo!("handle 0-variable atoms in execute_bfs"),
         }).collect();
 
         // Reused scratch: children at the current level, and the emitted-row buffer.
