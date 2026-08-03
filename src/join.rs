@@ -145,18 +145,16 @@ pub type TrieMap = Map<Value, Trie>;
 // toward the most advanced one until they all agree. This is how dijkstralog works, for
 // instance (https://github.com/rntz/dijkstralog).
 //
-// Unfortunately, while sorted vectors are simple and efficient, they can't be updated
-// in-place efficiently. So you'll need a B-tree, LSM-tree, or similar. These are quite a
-// bit more complicated to implement and work with than a hash-based Trie. (My vague
-// feeling, not substantiated by any actual benchmarking, is that B-trees are better for
-// reads and worse for large writes than LSM-trees. Dijkstralog contains an LSM
-// implementation.)
+// Unfortunately, while sorted vectors are simple and efficient and have much nicer memory
+// access patterns than a nested-hashtable trie, they can't be updated in-place
+// efficiently. So you'll need a B-tree, LSM-tree, or similar. These are quite a bit more
+// complicated to implement and work with. (Dijkstralog contains an LSM implementation.)
 //
-// You might think we could reuse the Rust stdlib's BTreeMap. Unfortunately, it doesn't
-// support the primitives needed for LFTJ: we need to be able to keep an internal iterator
-// into the BTree that can efficiently "seek" forward toward an upper bound. We can't do
-// this with standard iterators. There's an experimental "Cursor" interface on BTrees
-// available on Rust nightly (as of 2026-07-31) that gets partway there:
+// We can't directly use Rust stdlib's BTreeMap because it doesn't support the primitives
+// needed for LFTJ: we need to be able to keep an internal iterator into the BTree that
+// can efficiently "seek" forward toward an upper bound. Standard iterators don't do this.
+// There's an experimental "Cursor" interface on BTrees available on Rust nightly (as of
+// 2026-07-31) that gets partway there:
 //
 // https://github.com/rust-lang/rust/issues/107540
 // https://doc.rust-lang.org/std/collections/btree_map/struct.Cursor.html
@@ -565,12 +563,12 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
 }
 
 
-// ---------- UNIT TESTS: Trie::build across all IndexColumnShape kinds. ----------
+// ---------- UNIT TESTS (Claude-generated) ----------
 //
-// These poke at the trie's representation directly, so they live here rather than in the
-// integration tests. Exercises: multi-level tries, a non-identity permutation shape, the
-// EqColumn filter (R(x,x)), empty results (-> None), and the zero-level EqConst path
-// (-> Some(Leaf) / None).
+// Run Trie::build across all IndexColumnShape kinds. This pokes at the trie's
+// representation directly, so lives here rather than in the integration tests. Exercises:
+// multi-level tries, a non-identity permutation shape, the EqColumn filter (R(x,x)),
+// empty results (-> None), and the zero-level EqConst path (-> Some(Leaf) / None).
 #[cfg(test)]
 mod tests {
     use super::IndexColumnShape::{EqColumn, EqConst, TrieLevel};

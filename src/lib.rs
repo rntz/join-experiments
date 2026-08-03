@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 // Worst-case-optimal join experiments. The core engine lives in `join`; `hash` holds the
 // fast non-cryptographic hasher everything is parameterized over; `vec_db` and `graph` are
 // utilities shared by the benchmark example and the integration tests.
