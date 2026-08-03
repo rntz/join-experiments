@@ -302,6 +302,8 @@ impl Trie {
 
 // ---------- QUERY PLANNING ----------
 //
+// TODO: review & cleanup this LLM code
+//
 // Given a Query and a variable order, PlannedQuery::plan derives the trie indexes each
 // atom needs (as (relation, IndexShape) pairs) plus the per-variable `levels` structure
 // that drives execution. This is the *logical* plan: it names the indexes but doesn't
