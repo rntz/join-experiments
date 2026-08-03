@@ -1,8 +1,8 @@
 # NOTES
 
-Build;
+Build:
 
-    cargo build --all
+    cargo build --all-targets
 
 Tests:
 
