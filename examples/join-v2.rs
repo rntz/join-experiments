@@ -64,6 +64,9 @@ type Set<K> = HashSet<K, HashBuilder>;
 const FX_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 const FX_ROTATE: u32 = 5;
 
+// One issue with FxHash is that zeros always hash to zero; eg all Vecs containing only
+// zeros will hash-collide. So hashing variable-length structures is a bit dangerous.
+// Fortunately we don't do that. (Potential fix: make the initial hash 1.)
 #[derive(Default)]
 struct FxHasher { hash: u64 }
 
@@ -392,7 +395,7 @@ struct QueryPlan<'a> {
 impl<'a> QueryPlan<'a> {
     // Execute via depth-first backtracking.
     fn execute_dfs<F>(&self, mut f: F) where F: FnMut(&[Value]) {
-        if self.levels.len() == 0 { // TODO: add a test for this case.
+        if self.levels.is_empty() { // TODO: add a test for this case.
             f(&[]);
             return;
         }
@@ -483,7 +486,7 @@ impl<'a> QueryPlan<'a> {
                 // The proposer is the atom in this level with the fewest children.
                 let proposer_pos = (0..width)
                     .min_by_key(|&pos| row_nodes[level[pos]].len())
-                    .unwrap();
+                    .expect("Empty level - every query variable must be used in some atom!");
                 let proposer_map = row_nodes[level[proposer_pos]];
 
                 'keys: for (key, child) in proposer_map {
@@ -526,6 +529,12 @@ impl<'a> QueryPlan<'a> {
     // ======================================================================
 }
 
+// OBSERVATION: we trade back & forth between children & tries. children represents
+// "possible tries".
+//
+// TODO: instead of using children as a scratch buffer only, it could be made primary and
+// tries treated as a scratch buffer. and children could be Option<&'a Trie>, so it could
+// be our entry point, which would make handling failure (lack of any entries) easier.
 struct QueryDfsState<'a, F> {
     callback: F,
     levels: &'a Vec<Vec<usize>>,
@@ -554,7 +563,7 @@ impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
         let width = level.len();
         let proposer_pos: usize = (0..width)
             .min_by_key(|&pos| self.saved[mark + pos].len())
-            .unwrap();
+            .expect("Empty level - every query variable must be used in some atom!");
 
         let proposer_map = self.saved[mark + proposer_pos];
         'keys: for (key, child) in proposer_map {
@@ -683,7 +692,7 @@ mod tests {
         } else {
             println!(" deduped {} -> {}.", before, edges.len());
         }
-        return edges;
+        edges
     }
 
     // ---- A trivial in-memory Database backed by Vecs. ----
@@ -723,7 +732,7 @@ mod tests {
     }
 
     // Child of a node under `key` (panics if absent or if node is a Leaf).
-    fn child<'a>(node: &'a Trie, key: Value) -> &'a Trie {
+    fn child(node: &Trie, key: Value) -> &Trie {
         match node {
             Trie::Node(map) => map.get(&key).expect("missing key"),
             Trie::Leaf => panic!("expected a Trie::Node, got a Leaf"),
@@ -739,7 +748,7 @@ mod tests {
         plan.execute_dfs(|row| {
             out.push(row.to_vec());
             counter += 1;
-            if counter % 1_000_000 == 0 {
+            if counter.is_multiple_of(1_000_000) {
                 println!("found {:2} million results!", counter / 1_000_000);
             }
         });
@@ -1015,7 +1024,7 @@ mod tests {
     // as test 2, cross-checked against brute force. `max_edges` caps how much of the file
     // we read so we can start small and scale up; None means "the whole file". The crate
     // directory is resolved at compile time, so it works regardless of the working
-    // directory; if the file is missing the test is skipped, not failed.
+    // directory; a missing file panics (these are called from main, not run as #[test]s).
     pub fn snap_triangles_directed(dataset: &str, max_edges: Option<usize>) {
         let edges = snap_load(dataset, max_edges);
         let db = edge_db(&edges);
