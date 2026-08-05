@@ -90,17 +90,17 @@ pub struct Query<Db, Var, Op = Box<dyn Operator<Var>>> where
     Op: Operator<Var>,
 {
     pub vars: Vec<Var>,
-    // We separate relational Atoms from Operators here because the planner &
-    // execution engine treat them differently. It's possible we could unify them with a
-    // redesign of what query plans look like, but it doesn't seem obvious how.
+    // We separate relational Atoms from Operators here because the planner & execution
+    // engine treat them differently. It's possible we could unify them with a redesign of
+    // what query plans look like, but it doesn't seem obvious how.
     //
-    // Atoms get tries built for them; computed atoms don't.
+    // Atoms get tries built for them; operators don't.
     //
-    // Atoms get consulted on every variable they touch; computed atoms only on the last
-    // one (see "Limitations of this trait for computational atoms" below).
+    // Atoms get consulted on every variable they touch; operators, for now, only on the
+    // last one (see "Limitations of this trait for computational atoms" below).
     //
-    // Because we separate atoms from computed atoms, we only pay dispatch overhead for
-    // computed atoms; so queries without computation don't pay for it.
+    // Because we separate atoms from operators, we only pay dispatch overhead for
+    // operators; queries without operators don't pay.
     pub atoms: Vec<Atom<Db::RelId, Var>>,
     pub operators: Vec<Op>,
 }
