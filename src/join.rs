@@ -102,7 +102,7 @@ pub struct Query<Db, Var, Op = Box<dyn Operator<Var>>> where
     // Because we separate atoms from computed atoms, we only pay dispatch overhead for
     // computed atoms; so queries without computation don't pay for it.
     pub atoms: Vec<Atom<Db::RelId, Var>>,
-    pub computed_atoms: Vec<Op>,
+    pub operators: Vec<Op>,
 }
 
 // TODO: how do we represent constants in atoms?
