@@ -20,7 +20,7 @@ pub mod join_bfs;
 pub mod vec_db;
 
 pub use join::{
-    Atom, Database, ExecutableQuery, IndexColumnShape, Indexes, PlannedQuery, Query, Trie, Value,
+    Atom, Database, ExecutableQuery, IndexColumnShape, Indexes, QueryPlan, Query, Trie, Value,
 };
 pub use vec_db::VecDb;
 pub use graph::{

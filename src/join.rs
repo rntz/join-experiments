@@ -50,7 +50,7 @@ use crate::hash::Map;
 // 4. Use these stats (& FDs once we have them) to pick a variable order.
 //
 // 5. Build trie indexes on each relation based on the query & var order.
-//    DONE, see Query::plan, PlannedQuery::{build_indexes, bind}
+//    DONE, see Query::plan, QueryPlan::{build_indexes, bind}
 //
 // 6. Execute query using the indexes.
 //    DONE: see ExecutableQuery::execute_dfs
@@ -73,22 +73,36 @@ pub type Value = usize;
 // keys are determined by. This is less general than full FDs but easier to represent and
 // plan around and handles ACSet-type schemas.
 pub trait Database {
+    // TODO: separate into Schema and Database.
+    // Schema should be a struct with arity & FDs.
+    // Database trait should have count, rows and schema() -> Rc<Schema>.
     type RelId: Eq + Hash + Clone;
     fn arity(&self, r: Self::RelId) -> usize;
     fn count(&self, r: Self::RelId) -> usize;
+    // This assumes a row-oriented representation. for a columnar representation, maybe
+    // Item = &[&Value], a slice of pointers to entries in each column?
     fn rows(&self, r: Self::RelId) -> impl Iterator<Item = &[Value]>;
 }
 
-// impl<Db: Database> Database for &Db {
-//     type RelId = Db::RelId;
-//     fn arity(&self, r: Db::RelId) -> usize { (*self).arity(r) }
-//     fn count(&self, r: Db::RelId) -> usize { (*self).count(r) }
-//     fn rows(&self, r: Db::RelId) -> impl Iterator<Item = &[Value]> { (*self).rows(r) }
-// }
-
-pub struct Query<Db: Database, Var: Eq + Hash + Copy> {
+pub struct Query<Db, Var, Op = Box<dyn Operator<Var>>> where
+    Db: Database,
+    Var: Eq + Hash + Copy,
+    Op: Operator<Var>,
+{
     pub vars: Vec<Var>,
+    // We separate relational Atoms from Operators here because the planner &
+    // execution engine treat them differently. It's possible we could unify them with a
+    // redesign of what query plans look like, but it doesn't seem obvious how.
+    //
+    // Atoms get tries built for them; computed atoms don't.
+    //
+    // Atoms get consulted on every variable they touch; computed atoms only on the last
+    // one (see "Limitations of this trait for computational atoms" below).
+    //
+    // Because we separate atoms from computed atoms, we only pay dispatch overhead for
+    // computed atoms; so queries without computation don't pay for it.
     pub atoms: Vec<Atom<Db::RelId, Var>>,
+    pub computed_atoms: Vec<Op>,
 }
 
 // TODO: how do we represent constants in atoms?
@@ -97,37 +111,158 @@ pub struct Atom<RelId, Var> {
     pub vars: Vec<Var>,
 }
 
-// ==== ON IMPLEMENTING COMPUTATIONAL ATOMS ====
+impl<Db: Database, Var: Eq+Hash+Copy, Op: Operator<Var>> Query<Db, Var, Op> {
+    #[allow(unreachable_code, dead_code, unused)]
+    fn self_check(&self, db: &Db) {
+        todo!("check: self.vars is distinct; no duplicates");
+        todo!("check: every atom's length equals its relation's arity");
+        // A query is grounded if all its vars are grounded. An atom grounds all its
+        // variables. An operator grounds its output if its inputs are grounded. By
+        // applying these rules to saturation we can find the grounded variables.
+        todo!("check: query is grounded.");
+    }
+}
+
+
+// ---------- OPERATORS, or ATOMS THAT COMPUTE ----------
+
+// We parameterize Query over an Operator type because it lets us choose how to dispatch
+// on operators. If we have a concrete `enum MyOps { ... }` for all the query operators we
+// need, we can implement `Operator MyOps` by matching on this enum for performance
+// (especially on WebAssembly where indirect calls through function pointers may be extra
+// slow, according to Claude). But we can also use `Box<dyn Operator>` to mix-and-match
+// Operator impls without writing a big enum & match.
 //
-// Frank McSherry's DataToad project takes a "breadth-first" approach to solving WCOJs,
-// maintaining a vector of partial solutions for the first N variables, then extending to
-// partial solutions for N+1, etc. LFTJ takes a "depth first" or backtracking approach
-// instead. Both of these can incorporate computational atoms:
+// TODO: provide some examples that show how to do each of these.
+
+pub trait Operator<Var: Eq + Hash + Copy> {
+    fn inputs(&self) -> Vec<Var>;
+    fn output(&self) -> Option<Var>; // at most one output var!
+    // None -> failure. Some(x) -> success, output var value is x. If there is no output
+    // var, the value of x is irrelevant; just return Some(0xdeadbeef) or something.
+    fn compute(&self, inputs: &[Value]) -> Option<Value>;
+    // Always returns true. Here to remind you to refactor when it stops being true.
+    fn inputs_uniquely_determine_outputs(&self) -> bool;
+}
+
+// Limitations of this trait for operators:
 //
-// - Frank McSherry has a blog post about how to plan & execute computational atoms:
+// 0. Fixed input/output divison rather than offering multiple modes. Eg. in x = y, we
+//    treat x as input and y as output. It's sensible to also allow y as input and produce
+//    x as output, but we cannot represent this.
 //
-//   https://github.com/frankmcsherry/blog/blob/master/posts/2025-12-23.md
+// 1. An operator must have 0 or 1 output variables.
 //
-//   Email me (Michael Arntzenius, daekharel@gmail.com) if you're having trouble
-//   understanding it or how it relates to this implementation; or email Frank and cc me,
-//   he's quite friendly (but won't know anything about this implementation).
+// 2. Inputs must functionally determine the output.
 //
-// - The Leapfrog Triejoin paper discusses some kinds of computational atoms:
+// If you need these features, redesign this interface, and modify the variable order
+// picker and possibly also the representation of query plans.
 //
-//   https://arxiv.org/abs/1210.0481
+// The var order picker will exploit (2) by emitting output vars immediately when their
+// inputs become available. This is desirable only when the outputs are uniquely
+// determined by the inputs!
 //
-//   LFTJ uses a "trie iterator" interface. If you line things up right it's possible for
-//   many computational atoms to satisfy this interface. You can think of this as
-//   materializing the trie lazily/on-demand. Of course, computational atoms can't
-//   materialize levels of the trie that correspond to their *input* variables, but they
-//   can be told to "seek to position x" (this assigns that input variable to x). As long
-//   as *some* atom/trie iterator can materialize a list of candidates for this variable,
-//   things work out eventually.
+// The query plan/executor exploits (1) by only including/consulting a operator on the
+// level for its last variable. (If that final variable is its output, the atom can
+// propose values; if it is one of its inputs, it can check consistency.) But if we had
+// multiple output variables, OR if the output var were not guaranteed to be examined
+// immediately after the inputs (if we add operators whose outputs are not unique), then
+// we should consult the atom as soon as all input are bound, and again whenever we pick
+// an output var. This considerably complicates the interaction between operators and the
+// rest of the query.
 //
-//   See section 3.4, p6, list item 1, which discusses equality atoms, and section 6.2,
-//   numbered list, elements 2-3 ("Functions", "Primitives") and 6 ("Ranges"). (Note that
-//   "Function" does NOT mean computational function here: it means functionaln
-//   dependency.)
+// Here are some examples of operators we might want, and their properties.
+//
+//              SYNTAX          INPUTS      OUTPUTS     FD?
+// INEQUALITY   x ≤ y           x,y         none        trivial
+//
+// CONSTANT     x = 2           none        x           yes
+//
+// EQUALITY     x = y           x           y           yes, ∀x ∃!x  x=y
+//                              y           x           yes, ∀y ∃!x  x=y
+//
+// RANGE        i ∈ range(n,m)  n,m         i           no
+//
+// ADDITION     x = y + z       y,z         x           yes; ∀y,z ∃!x  x = y + z
+//                              x,z         y           yes; at most one y for fixed (x,z)
+//                              x,y         z           yes; at most one z for fixed (x,y)
+//
+// STRING       x = y ++ z      y,z         x           yes; ∀y,z ∃!x
+// APPEND                       x           y,z         no; many y, z yield same x = y ++ z
+//                              x,y         z           yes; ∀x,y ∃ at *most* one z
+//                              x,z         y           yes; ∀x,z ∃ at most one y
+//
+// The addition & string append cases are interesting examples of "multi-modal" relational
+// operators: given strings y,z we can compute x = y ++ z. But also: given x, we can ask
+// for all y ++ z = x, all "splittings" of it. Also: given x,y we can ask: is y a prefix
+// of x, and if so, what's the suffix?
+//
+// With our single-mode limitation, the mode (input/output division) gets hard-coded into
+// the atom and thus the query. This is probably okay for many queries, but it means the
+// variable order picker has less room to choose how to order computation.
+
+#[allow(dead_code)]
+enum Empty {}                   // useful representation if your query has no operators.
+impl<V: Eq+Hash+Copy> Operator<V> for Empty {
+    fn inputs(&self) -> Vec<V> { match *self {} }
+    fn output(&self) -> Option<V> { match *self {} }
+    fn compute(&self, _: &[Value]) -> Option<Value> { match *self {} }
+    fn inputs_uniquely_determine_outputs(&self) -> bool { match *self {} }
+}
+
+// This impl lets us use Box<dyn Operator> as our Operator representation in Queries.
+impl<Var, Ptr> Operator<Var> for Ptr where
+    Var: Eq+Hash+Copy,
+    Ptr: std::ops::Deref<Target = dyn Operator<Var>>,
+{
+    fn inputs(&self) -> Vec<Var> { (**self).inputs() }
+    fn output(&self) -> Option<Var> { (**self).output() }
+    fn compute(&self, inputs: &[Value]) -> Option<Value> { (**self).compute(inputs) }
+    fn inputs_uniquely_determine_outputs(&self) -> bool {
+        (**self).inputs_uniquely_determine_outputs()
+    }
+}
+
+// ==== ON IMPLEMENTING OPERATORS EFFICIENTLY ====
+//
+// It's possible dispatch overhead for operators will become a bottleneck for query
+// execution in some cases. If so, it's worth investigating Frank McSherry's approach to
+// them, which attempts to dispatch as infrequently as possible by having operators
+// process large "chunks" of data at a time.
+//
+// He does this via a breadth-first approach to solving WCOJs, maintaining a vector of
+// partial solutions for the first N variables, then extending to partial solutions for
+// N+1, etc. To see an example of this, look at the examples/join-v1.rs prototype. See
+// also his blog post:
+//
+// https://github.com/frankmcsherry/blog/blob/master/posts/2025-12-23.md
+//
+// Email me (Michael Arntzenius, daekharel@gmail.com) if you're having trouble
+// understanding it or how it relates to this implementation; or email Frank and cc me,
+// he's quite friendly (but won't know anything about this implementation).
+//
+// Note that it's a little more complicated than just switching depth for breadth. The
+// Claude-generated bfs in join_bfs.rs, for instance, is not Frank-like and would not
+// improve performance. Also, breadth-first search can be very memory hungry if there are
+// lots of results; if this is a problem it might be worth doing something in-between BFS
+// & DFS involving fixed-length chunks of partial solutions.
+//
+// Our current approach is depth-first and more like a hash-based version of LFTJ. You can
+// read the LFTJ paper if you like, but this code is probably easier to understand.
+//
+// LFTJ paper: https://arxiv.org/abs/1210.0481
+//
+// LFTJ uses a "trie iterator" interface. If you line things up right it's possible for
+// many computational atoms to satisfy this interface. You can think of this as
+// materializing the trie lazily/on-demand. Of course, computational atoms can't
+// materialize levels of the trie that correspond to their *input* variables, but they
+// can be told to "seek to position x" (this assigns that input variable to x). As long
+// as *some* atom/trie iterator can materialize a list of candidates for this variable,
+// things work out eventually.
+//
+// See section 3.4, p6, list item 1, which discusses equality atoms, and section 6.2,
+// numbered list, elements 2-3 ("Functions", "Primitives") and 6 ("Ranges"). (Note that
+// "Function" does NOT mean computational function here: it means functional dependency.)
 
 
 // ---------- TRIE INDEXES ----------
@@ -301,45 +436,38 @@ impl Trie {
 
 
 // ---------- QUERY PLANNING ----------
-//
-// TODO: review & cleanup this LLM code
-//
-// Given a Query and a variable order, PlannedQuery::plan derives the trie indexes each
-// atom needs (as (relation, IndexShape) pairs) plus the per-variable `levels` structure
-// that drives execution. This is the *logical* plan: it names the indexes but doesn't
-// build them. `build_indexes` materializes them against a Database, and `bind` binds them
-// into an ExecutableQuery.
-//
-// The core rule: within an atom, its trie levels are its distinct variables sorted by
-// their position in the global variable order. This makes each atom's trie descend in
-// lock-step with the global binding order, which is exactly what execute_dfs assumes.
-pub struct PlannedQuery<RelId> {
-    // One entry per atom, in atom order: atoms[a] = (relation, index shape) for atom a.
-    // Atoms that need the same index have equal (RelId, IndexShape) entries; that sharing
-    // is realized by build_indexes, which dedups on this key.
+pub struct QueryPlan<RelId> {
+    // Replaces query atoms by the shape of the index we need for them.
     pub atoms: Vec<(RelId, IndexShape)>,
-    // levels[i] lists the atoms whose trie descends one level when binding the i'th
-    // variable of the order. Entries are indices into `atoms`, and line up with
-    // ExecutableQuery::tries (also atom-order). See ExecutableQuery for the full story.
+    // One level per variable.
+    // levels[i] gives the indexes of the atoms which touch variable i.
     pub levels: Vec<Vec<usize>>,
 }
 
-// The built trie indexes, keyed by (relation, shape) so shared indexes are stored once. A
-// None value means the index is empty (no rows survived its filters).
+// For example, Query { vars: [x,y,z], atoms: [R(x,y), R(y,z)] }.plan() yields:
+// QueryPlan {
+//     atoms: [(R, [TrieLevel(0), TrieLevel(1)]),
+//             (R, [TrieLevel(0), TrieLevel(1)])],
+//     levels: [[0], [0,1], [1]],
+// }
 //
-// Keying on (RelId, IndexShape) makes this self-describing when debug-printed and makes
-// index sharing fall out for free: two atoms with the same key hit the same entry.
-pub type Indexes<RelId> = HashMap<(RelId, IndexShape), Option<Trie>>;
+// TODO: some unit tests for Query::plan.
+// Try this, and the same with var order [y,x,z].
+// Try some with multiple uses of the same variable, or (once implemented) constants.
 
-impl<Db: Database, Var: Eq + Hash + Copy> Query<Db, Var> {
-    // Derive a PlannedQuery for a given variable order. `order` must list every variable
-    // used by an atom, without repeats. Execution binds variables — and emits result
-    // columns — in `order` order.
-    pub fn plan(&self, order: &[Var]) -> PlannedQuery<Db::RelId> {
+// ========== TODO: review & cleanup this LLM code: ==========
+impl<Db, Var, Op> Query<Db, Var, Op> where
+    Db: Database,
+    Var: Eq + Hash + Copy,
+    Op: Operator<Var>,
+{
+    pub fn plan(&self, order: &[Var]) -> QueryPlan<Db::RelId> {
         use IndexColumnShape::{EqColumn, TrieLevel};
 
+        // TODO: check that order is a permutation of the query variables.
+
         // order_pos[v] = position of variable v in the global variable order.
-        let order_pos: Map<Var, usize> =
+        let order_pos: HashMap<Var, usize> =
             order.iter().enumerate().map(|(i, &v)| (v, i)).collect();
         assert_eq!(order_pos.len(), order.len(), "variable order repeats a variable");
 
@@ -350,7 +478,7 @@ impl<Db: Database, Var: Eq + Hash + Copy> Query<Db, Var> {
             // first_col[v] = the first column of this atom where variable v appears
             // (or_insert keeps the earliest column). `distinct` is its key set; its order
             // doesn't matter — we sort it for levels and otherwise treat it as a set.
-            let mut first_col: Map<Var, usize> = Map::default();
+            let mut first_col: HashMap<Var, usize> = HashMap::default();
             for (col, &v) in atom.vars.iter().enumerate() {
                 first_col.entry(v).or_insert(col);
             }
@@ -363,7 +491,7 @@ impl<Db: Database, Var: Eq + Hash + Copy> Query<Db, Var> {
             by_order.sort_by_key(|v| {
                 *order_pos.get(v).expect("every atom variable must appear in the variable order")
             });
-            let level_of: Map<Var, usize> =
+            let level_of: HashMap<Var, usize> =
                 by_order.iter().enumerate().map(|(lvl, &v)| (v, lvl)).collect();
 
             // Build the shape column by column: a variable's first occurrence becomes a
@@ -383,12 +511,17 @@ impl<Db: Database, Var: Eq + Hash + Copy> Query<Db, Var> {
             atoms.push((atom.relation.clone(), shape));
         }
 
-        PlannedQuery { atoms, levels }
+        QueryPlan { atoms, levels }
     }
 }
 
-impl<RelId: Eq + Hash + Clone> PlannedQuery<RelId> {
-    // Materialize every distinct index against `db`.
+// ========== END LLM CODE ==========
+
+// The built trie indexes, keyed by (relation, shape) so shared indexes are stored once.
+// A None value means the index is empty.
+pub type Indexes<RelId> = HashMap<(RelId, IndexShape), Option<Trie>>;
+
+impl<RelId: Eq + Hash + Clone> QueryPlan<RelId> {
     pub fn build_indexes<Db: Database<RelId = RelId>>(&self, db: &Db) -> Indexes<RelId> {
         let mut indexes: Indexes<RelId> = HashMap::new();
         for (rel, shape) in &self.atoms {
@@ -399,8 +532,8 @@ impl<RelId: Eq + Hash + Clone> PlannedQuery<RelId> {
         indexes
     }
 
-    // Bind the built indexes into an executable plan. Returns None if any atom's index is
-    // empty: a join is a conjunction, so one empty index means the whole query is empty.
+    // Bind indexes to the plan for execution. Returns None if any atom's index is empty:
+    // a join is a conjunction, so one empty index means the whole query is empty.
     //
     // TODO: this means a query can be empty in two ways - either None here, or by
     // yielding nothing in execute_dfs(). This is ugly from a consumer's point of view.

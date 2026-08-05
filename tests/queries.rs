@@ -1,3 +1,6 @@
+// TODO: get rid of the queries that hand-construct ExecutableQuery and instead make a
+// QueryPlan & bind it.
+
 // (Mostly Claude-generated with minimal review.)
 //
 // End-to-end query tests: build trie indexes + a ExecutableQuery by hand (as a planner
@@ -168,6 +171,7 @@ fn test_plan_triangle() {
     let q: Query<VecDb, char> = Query {
         vars: vec!['x', 'y', 'z'],
         atoms: vec![atom("E", &['x', 'y']), atom("E", &['y', 'z']), atom("E", &['z', 'x'])],
+        computed_atoms: vec![],
     };
     let planned = q.plan(&['x', 'y', 'z']);
 
@@ -195,6 +199,7 @@ fn test_plan_path() {
     let q: Query<VecDb, char> = Query {
         vars: vec!['x', 'y', 'z'],
         atoms: vec![atom("E", &['x', 'y']), atom("E", &['y', 'z'])],
+        computed_atoms: vec![],
     };
     let planned = q.plan(&['x', 'y', 'z']);
 
@@ -227,6 +232,7 @@ fn test_plan_self_loop() {
     let q: Query<VecDb, char> = Query {
         vars: vec!['x'],
         atoms: vec![atom("R", &['x', 'x'])],
+        computed_atoms: vec![],
     };
     let planned = q.plan(&['x']);
 
@@ -248,6 +254,7 @@ fn test_plan_empty_index() {
     let q: Query<VecDb, char> = Query {
         vars: vec!['x'],
         atoms: vec![atom("S", &['x', 'x'])],
+        computed_atoms: vec![],
     };
     let planned = q.plan(&['x']);
     let indexes = planned.build_indexes(&db);
@@ -266,6 +273,7 @@ fn test_plan_undirected_triangle() {
     let q: Query<VecDb, char> = Query {
         vars: vec!['x', 'y', 'z'],
         atoms: vec![atom("E", &['x', 'y']), atom("E", &['y', 'z']), atom("E", &['x', 'z'])],
+        computed_atoms: vec![],
     };
     let planned = q.plan(&['x', 'y', 'z']);
 

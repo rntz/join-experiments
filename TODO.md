@@ -42,10 +42,10 @@ NOW DONE I THINK:
 - Problem: empty index -> can't even build a QueryPlan because we need Trie not
   Option<Trie>.
 
-- DONE: query planning: derive which trie indexes to build from a query + variable
-  order and bundle them into a struct. See Query::plan / PlannedQuery / Indexes in
-  src/join.rs. (Follow-up: the benchmark example still hand-builds its ExecutableQuery;
-  could be switched over to the planner. And constant atoms aren't wired into plan() yet.)
+- DONE: query planning: derive which trie indexes to build from a query + variable order
+  and bundle them into a struct. See Query::plan / QueryPlan / Indexes in src/join.rs.
+  (Follow-up: the benchmark example still hand-builds its ExecutableQuery; could be
+  switched over to the planner. And constant atoms aren't wired into plan() yet.)
 
 NOT YET DONE:
 - regression test for previous bug: Consider `E(x,y) T(5)`. The atom `T(5)` will build a
