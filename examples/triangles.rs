@@ -19,8 +19,8 @@ fn atom(rel: &'static str, vars: &[char]) -> Atom<&'static str, char> {
 fn main() {
     let datasets: Vec<&'static str> = vec![
         "ca-GrQc.txt",          // 14k undirected edges -> 48k undirected triangles
-        "wiki-Vote.txt",        // 100k -> 600k
-        "email-Enron.txt",      // 184k -> 700k
+        // "wiki-Vote.txt",        // 100k -> 600k
+        // "email-Enron.txt",      // 184k -> 700k
         // "soc-Slashdot0811.txt", // 470k -> 550k
         "cit-HepTh.txt",        // 350k -> 1.5m
         // "soc-Epinions1.txt",    // 400k -> 1.6m
@@ -36,12 +36,12 @@ fn main() {
         snap_triangles_undirected(name, None);
     }
 
-    // // These mostly, but not always, generate many more results. NB. each directed
-    // // triangle is counted 3x (for its 3 rotations), except for self-triangles (x->x->x).
-    // println!("========== DIRECTED TRIANGLE BENCHMARKS ==========");
-    // for &name in &datasets {
-    //     snap_triangles_directed(name, None);
-    // }
+    // These mostly, but not always, generate many more results. NB. each directed
+    // triangle is counted 3x (for its 3 rotations), except for self-triangles (x->x->x).
+    println!("========== DIRECTED TRIANGLE BENCHMARKS ==========");
+    for &name in &["wiki-Vote.txt"] {
+        snap_triangles_directed(name, None);
+    }
 }
 
 // Run a plan depth-first, collect results, and sort. Like ExecutableQuery::collect_dfs but with a
