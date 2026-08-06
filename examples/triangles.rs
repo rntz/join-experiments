@@ -39,6 +39,7 @@ fn main() {
     // These mostly, but not always, generate many more results. NB. each directed
     // triangle is counted 3x (for its 3 rotations), except for self-triangles (x->x->x).
     println!("========== DIRECTED TRIANGLE BENCHMARKS ==========");
+    #[allow(clippy::single_element_loop)]
     for &name in &["wiki-Vote.txt"] {
         snap_triangles_directed(name, None);
     }
