@@ -115,7 +115,7 @@ pub struct OpCall<Op, Var> {
     // op.has_output(), the last var is the output.
 }
 
-impl<Var: Eq+Hash+Copy, Rel: Eq+Hash+Copy, Op: Operator> Query<Var, Rel, Op> {
+impl<Var: Eq+Hash+Copy, Rel: Eq+Hash+Clone, Op: Operator> Query<Var, Rel, Op> {
     #[allow(unreachable_code, dead_code, unused)]
     fn self_check<Db: Database<Rel = Rel>>(&self, db: &Db) {
         todo!("check: self.vars is distinct; no duplicates");
@@ -517,7 +517,7 @@ pub struct FilterOp<Op> {
 // ========== TODO: review & cleanup this LLM code: ==========
 impl<Var, Rel, Op> Query<Var, Rel, Op> where
     Var: Eq + Hash + Copy,
-    Rel: Eq + Hash + Copy,
+    Rel: Eq + Hash + Clone,
     Op: Operator + Clone,
 {
     pub fn plan(&self, order: &[Var]) -> QueryPlan<Rel, Op> {
