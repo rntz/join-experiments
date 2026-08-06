@@ -687,20 +687,6 @@ pub struct ExecutableQuery<'a, Op> {
 //                           [1,2]], // z ← fwd[y] ∩ bwd[x] = {z : E(y,z) ∧ E(z,x) }
 //     }
 
-impl<'a> ExecutableQuery<'a, Rc<dyn Operator>> {
-    // Build an operator-free executable query from tries and per-variable atom lists — a
-    // convenience for hand-written plans (tests, benchmarks) before the planner is wired up
-    // everywhere. Equivalent to a QueryPlan whose levels have no operators.
-    pub fn new(tries: Vec<&'a Trie>, levels: Vec<Vec<usize>>) -> Self {
-        ExecutableQuery {
-            tries,
-            levels: levels.into_iter()
-                .map(|atoms| Level { atoms, proposer: None, filters: Vec::new() })
-                .collect(),
-        }
-    }
-}
-
 // Our query execution strategy is depth-first traversal of the implicit result trie with
 // one level for each var in variable order. This struct contains the state needed for
 // this process.
