@@ -10,7 +10,7 @@ use std::time::Instant;
 use rntz_joins::IndexColumnShape::TrieLevel;
 use rntz_joins::{
     binary_triangles_directed, binary_triangles_undirected, edge_db, snap_load, to_low_high,
-    ExecutableQuery, Trie, Value,
+    ExecutableQuery, Trie, Value, Operator,
 };
 
 fn main() {
@@ -43,7 +43,7 @@ fn main() {
 
 // Run a plan depth-first, collect results, and sort. Like ExecutableQuery::collect_dfs but with a
 // progress print every million results, since the big datasets take a while.
-fn run_plan(plan: &ExecutableQuery) -> Vec<Vec<Value>> {
+fn run_plan<Op: Operator>(plan: &ExecutableQuery<Op>) -> Vec<Vec<Value>> {
     let mut out: Vec<Vec<Value>> = Vec::new();
     let mut counter: usize = 0;
     plan.execute_dfs(|row| {
@@ -75,10 +75,10 @@ pub fn snap_triangles_directed(dataset: &str, max_edges: Option<usize>) {
 
     // WCOJ phase 2: execute the join, materializing + sorting the results just like the
     // brute force does, so the two are compared on equal terms.
-    let plan = ExecutableQuery {
-        tries: vec![&fwd, &fwd, &bwd],
-        levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
-    };
+    let plan = ExecutableQuery::new(
+        vec![&fwd, &fwd, &bwd],
+        vec![vec![0, 2], vec![0, 1], vec![1, 2]],
+    );
     let t = Instant::now();
     let got = run_plan(&plan);
     let exec_time = t.elapsed();
@@ -122,10 +122,10 @@ pub fn snap_triangles_undirected(dataset: &str, max_edges: Option<usize>) {
     let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
     let build_time = wcoj_start.elapsed();
 
-    let plan = ExecutableQuery {
-        tries: vec![&fwd, &fwd, &fwd],
-        levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
-    };
+    let plan = ExecutableQuery::new(
+        vec![&fwd, &fwd, &fwd],
+        vec![vec![0, 2], vec![0, 1], vec![1, 2]],
+    );
     let t = Instant::now();
     let got = run_plan(&plan);
     let exec_time = t.elapsed();

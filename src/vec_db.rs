@@ -28,7 +28,7 @@ impl Default for VecDb {
 }
 
 impl Database for VecDb {
-    type RelId = &'static str;
+    type Rel = &'static str;
     fn arity(&self, r: &'static str) -> usize { self.rels[r].0 }
     fn count(&self, r: &'static str) -> usize { self.rels[r].1.len() }
     fn rows(&self, r: &'static str) -> impl Iterator<Item = &[Value]> {

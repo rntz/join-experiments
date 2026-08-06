@@ -1,9 +1,9 @@
 // Breadth-first search version of WCOJ execution, Claude-generated. Didn't outperform DFS
 // significantly so I'm not investigating further yet. I think it would need further
 // tweaking to incorporate the insights from DataToad; see "MICHAEL NOTES" below.
-use crate::join::{Value, ExecutableQuery, TrieMap, Trie};
+use crate::join::{Value, ExecutableQuery, Operator, TrieMap, Trie};
 
-impl<'a> ExecutableQuery<'a> {
+impl<'a, Op: Operator> ExecutableQuery<'a, Op> {
     // ======================================================================
     // BELOW IS CLAUDE-GENERATED CODE THAT I HAVE NOT REVIEWED YET - MICHAEL
     // ======================================================================
@@ -28,6 +28,11 @@ impl<'a> ExecutableQuery<'a> {
         }
         let n_atoms = self.tries.len();
 
+        // The BFS executor predates operators and doesn't handle them yet; the planner may
+        // put a proposer or filters on a level, but only operator-free plans run here.
+        assert!(self.levels.iter().all(|l| l.proposer.is_none() && l.filters.is_empty()),
+            "execute_bfs does not support operators yet");
+
         // Initial frontier: a single partial solution with an empty prefix and every atom
         // sitting at its root node.
         let mut prefixes: Vec<Value> = Vec::new();
@@ -43,7 +48,7 @@ impl<'a> ExecutableQuery<'a> {
         for (level_idx, level) in self.levels.iter().enumerate() {
             let depth = level_idx;                // prefix length of the current frontier
             let count = nodes.len() / n_atoms;    // # partial solutions in the frontier
-            let width = level.len();
+            let width = level.atoms.len();
             let last = level_idx + 1 == n_vars;
 
             // The next frontier we're building (unused on the last level, where we emit).
@@ -77,16 +82,16 @@ impl<'a> ExecutableQuery<'a> {
 
                 // The proposer is the atom in this level with the fewest children.
                 let proposer_pos = (0..width)
-                    .min_by_key(|&pos| row_nodes[level[pos]].len())
+                    .min_by_key(|&pos| row_nodes[level.atoms[pos]].len())
                     .expect("Empty level - every query variable must be used in some atom!");
-                let proposer_map = row_nodes[level[proposer_pos]];
+                let proposer_map = row_nodes[level.atoms[proposer_pos]];
 
                 'keys: for (key, child) in proposer_map {
                     // Intersect: look up this key in every other trie at this level.
                     children.clear();
                     for pos in 0..width {
                         if pos == proposer_pos { children.push(child); continue; }
-                        match row_nodes[level[pos]].get(key) {
+                        match row_nodes[level.atoms[pos]].get(key) {
                             Some(c) => children.push(c),
                             None => continue 'keys,
                         }
@@ -105,7 +110,7 @@ impl<'a> ExecutableQuery<'a> {
                         // their child under `key`. A Leaf child bottoms out and is never read.
                         let base = next_nodes.len();
                         next_nodes.extend_from_slice(row_nodes);
-                        for (pos, &trie_idx) in level.iter().enumerate() {
+                        for (pos, &trie_idx) in level.atoms.iter().enumerate() {
                             if let Trie::Node(map) = children[pos] { next_nodes[base + trie_idx] = map; }
                         }
                     }

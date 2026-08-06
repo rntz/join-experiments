@@ -8,7 +8,7 @@
 use rntz_joins::IndexColumnShape::{EqColumn, TrieLevel};
 use rntz_joins::{
     binary_triangles_directed, binary_triangles_undirected, edge_db, to_low_high, Atom,
-    ExecutableQuery, Query, Trie, Value, VecDb,
+    ExecutableQuery, Query, QueryPlan, Trie, Value, VecDb,
 };
 
 // ---- triangle query E(x,y) E(y,z) E(z,x), order x,y,z. ----
@@ -26,10 +26,10 @@ fn test_triangle_query() {
     // atoms: fwd(x,y) fwd(y,z) bwd(x,z).
     let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
     let bwd = Trie::build(&db, "E", &vec![TrieLevel(1), TrieLevel(0)]).unwrap();
-    let plan = ExecutableQuery {
-        tries: vec![&fwd, &fwd, &bwd],
-        levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
-    };
+    let plan = ExecutableQuery::new(
+        vec![&fwd, &fwd, &bwd],
+        vec![vec![0, 2], vec![0, 1], vec![1, 2]],
+    );
     let got = plan.collect_dfs();
     let want = binary_triangles_directed(&edges);
 
@@ -50,10 +50,10 @@ fn test_path_query() {
     let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
 
     // levels: x <- entry0; y <- entry0 ∩ entry1; z <- entry1.
-    let plan = ExecutableQuery {
-        tries: vec![&fwd, &fwd],
-        levels: vec![vec![0], vec![0, 1], vec![1]],
-    };
+    let plan = ExecutableQuery::new(
+        vec![&fwd, &fwd],
+        vec![vec![0], vec![0, 1], vec![1]],
+    );
     let got = plan.collect_dfs();
 
     let mut want: Vec<Vec<Value>> = Vec::new();
@@ -79,7 +79,7 @@ fn test_self_loop_query() {
         vec![vec![0, 0], vec![1, 1], vec![2, 3], vec![4, 4], vec![5, 6]],
     );
     let diag = Trie::build(&db, "R", &vec![TrieLevel(0), EqColumn(0)]).unwrap();
-    let plan = ExecutableQuery { tries: vec![&diag], levels: vec![vec![0]] };
+    let plan = ExecutableQuery::new(vec![&diag], vec![vec![0]]);
     let got = plan.collect_dfs();
     assert_eq!(got, vec![vec![0], vec![1], vec![4]], "self-loop mismatch");
 }
@@ -98,10 +98,10 @@ fn test_undirected_triangle_query() {
 
     let db = edge_db(&edges);
     let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
-    let plan = ExecutableQuery {
-        tries: vec![&fwd, &fwd, &fwd],
-        levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
-    };
+    let plan = ExecutableQuery::new(
+        vec![&fwd, &fwd, &fwd],
+        vec![vec![0, 2], vec![0, 1], vec![1, 2]],
+    );
     let got = plan.collect_dfs();
     let want = binary_triangles_undirected(&edges);
     assert_eq!(got, want, "undirected join vs brute force");
@@ -123,26 +123,26 @@ fn test_bfs_matches_dfs() {
     let db = edge_db(&edges);
     let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
     let bwd = Trie::build(&db, "E", &vec![TrieLevel(1), TrieLevel(0)]).unwrap();
-    let tri = ExecutableQuery {
-        tries: vec![&fwd, &fwd, &bwd],
-        levels: vec![vec![0, 2], vec![0, 1], vec![1, 2]],
-    };
+    let tri = ExecutableQuery::new(
+        vec![&fwd, &fwd, &bwd],
+        vec![vec![0, 2], vec![0, 1], vec![1, 2]],
+    );
 
     // Path query (a single trie shared across two levels).
     let pedges: Vec<(Value, Value)> = vec![(0, 1), (1, 2), (1, 3), (2, 3), (3, 0)];
     let pdb = edge_db(&pedges);
     let pfwd = Trie::build(&pdb, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
-    let path = ExecutableQuery { tries: vec![&pfwd, &pfwd], levels: vec![vec![0], vec![0, 1], vec![1]] };
+    let path = ExecutableQuery::new(vec![&pfwd, &pfwd], vec![vec![0], vec![0, 1], vec![1]]);
 
     // Self-loop query (a depth-1 EqColumn trie).
     let sdb = VecDb::new().rel(
         "R", 2, vec![vec![0, 0], vec![1, 1], vec![2, 3], vec![4, 4], vec![5, 6]],
     );
     let diag = Trie::build(&sdb, "R", &vec![TrieLevel(0), EqColumn(0)]).unwrap();
-    let loop_ = ExecutableQuery { tries: vec![&diag], levels: vec![vec![0]] };
+    let loop_ = ExecutableQuery::new(vec![&diag], vec![vec![0]]);
 
     // Empty query (no variables): both should yield exactly one empty tuple.
-    let empty = ExecutableQuery { tries: vec![], levels: vec![] };
+    let empty = ExecutableQuery::new(vec![], vec![]);
 
     for plan in [&tri, &path, &loop_, &empty] {
         assert_eq!(plan.collect_dfs(), plan.collect_bfs(), "bfs and dfs disagree");
@@ -161,6 +161,12 @@ fn atom(rel: &'static str, vars: &[char]) -> Atom<&'static str, char> {
     Atom { relation: rel, vars: vars.to_vec() }
 }
 
+// The `atoms` list of each plan level, in order. These operator-free plan tests check the
+// atom indexes per level; a Level now also carries proposer/filter operators (none here).
+fn level_atoms<R, Op>(plan: &QueryPlan<R, Op>) -> Vec<Vec<usize>> {
+    plan.levels.iter().map(|l| l.atoms.clone()).collect()
+}
+
 // ---- planning the directed triangle: two shared indexes, the documented plan. ----
 #[test]
 fn test_plan_triangle() {
@@ -168,7 +174,7 @@ fn test_plan_triangle() {
         (0, 1), (1, 2), (2, 0), (0, 2), (2, 1), (1, 0), (1, 3), (3, 1),
     ];
     let db = edge_db(&edges);
-    let q: Query<VecDb, char> = Query {
+    let q: Query<char, &'static str> = Query {
         vars: vec!['x', 'y', 'z'],
         atoms: vec![atom("E", &['x', 'y']), atom("E", &['y', 'z']), atom("E", &['z', 'x'])],
         operators: vec![],
@@ -182,7 +188,7 @@ fn test_plan_triangle() {
         ("E", vec![TrieLevel(1), TrieLevel(0)]),
     ]);
     // Exactly the plan worked out in join.rs's ExecutableQuery example.
-    assert_eq!(planned.levels, vec![vec![0, 2], vec![0, 1], vec![1, 2]]);
+    assert_eq!(level_atoms(&planned), vec![vec![0, 2], vec![0, 1], vec![1, 2]]);
 
     let indexes = planned.build_indexes(&db);
     assert_eq!(indexes.len(), 2, "fwd and bwd are the only distinct indexes");
@@ -196,7 +202,7 @@ fn test_plan_triangle() {
 fn test_plan_path() {
     let edges: Vec<(Value, Value)> = vec![(0, 1), (1, 2), (1, 3), (2, 3), (3, 0)];
     let db = edge_db(&edges);
-    let q: Query<VecDb, char> = Query {
+    let q: Query<char, &'static str> = Query {
         vars: vec!['x', 'y', 'z'],
         atoms: vec![atom("E", &['x', 'y']), atom("E", &['y', 'z'])],
         operators: vec![],
@@ -207,7 +213,7 @@ fn test_plan_path() {
         ("E", vec![TrieLevel(0), TrieLevel(1)]),
         ("E", vec![TrieLevel(0), TrieLevel(1)]),
     ]);
-    assert_eq!(planned.levels, vec![vec![0], vec![0, 1], vec![1]]);
+    assert_eq!(level_atoms(&planned), vec![vec![0], vec![0, 1], vec![1]]);
 
     let indexes = planned.build_indexes(&db);
     assert_eq!(indexes.len(), 1, "both atoms share one index");
@@ -229,7 +235,7 @@ fn test_plan_self_loop() {
     let db = VecDb::new().rel(
         "R", 2, vec![vec![0, 0], vec![1, 1], vec![2, 3], vec![4, 4], vec![5, 6]],
     );
-    let q: Query<VecDb, char> = Query {
+    let q: Query<char, &'static str> = Query {
         vars: vec!['x'],
         atoms: vec![atom("R", &['x', 'x'])],
         operators: vec![],
@@ -237,7 +243,7 @@ fn test_plan_self_loop() {
     let planned = q.plan(&['x']);
 
     assert_eq!(planned.atoms, vec![("R", vec![TrieLevel(0), EqColumn(0)])]);
-    assert_eq!(planned.levels, vec![vec![0]]);
+    assert_eq!(level_atoms(&planned), vec![vec![0]]);
 
     let indexes = planned.build_indexes(&db);
     let exec = planned.bind(&indexes).expect("self-loop query is non-empty");
@@ -251,7 +257,7 @@ fn test_plan_self_loop() {
 #[test]
 fn test_plan_empty_index() {
     let db = VecDb::new().rel("S", 2, vec![vec![0, 1], vec![1, 0]]); // no (a,a) rows
-    let q: Query<VecDb, char> = Query {
+    let q: Query<char, &'static str> = Query {
         vars: vec!['x'],
         atoms: vec![atom("S", &['x', 'x'])],
         operators: vec![],
@@ -270,7 +276,7 @@ fn test_plan_undirected_triangle() {
     ];
     let edges = to_low_high(&raw);
     let db = edge_db(&edges);
-    let q: Query<VecDb, char> = Query {
+    let q: Query<char, &'static str> = Query {
         vars: vec!['x', 'y', 'z'],
         atoms: vec![atom("E", &['x', 'y']), atom("E", &['y', 'z']), atom("E", &['x', 'z'])],
         operators: vec![],
@@ -283,7 +289,7 @@ fn test_plan_undirected_triangle() {
         ("E", vec![TrieLevel(0), TrieLevel(1)]),
         ("E", vec![TrieLevel(0), TrieLevel(1)]),
     ]);
-    assert_eq!(planned.levels, vec![vec![0, 2], vec![0, 1], vec![1, 2]]);
+    assert_eq!(level_atoms(&planned), vec![vec![0, 2], vec![0, 1], vec![1, 2]]);
 
     let indexes = planned.build_indexes(&db);
     assert_eq!(indexes.len(), 1, "all three atoms share one index");

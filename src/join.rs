@@ -1,5 +1,6 @@
 use std::hash::Hash;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::hash::Map;
 
@@ -74,22 +75,20 @@ pub type Value = usize;
 // plan around and handles ACSet-type schemas.
 pub trait Database {
     // TODO: separate into Schema and Database.
-    // Schema should be a struct with arity & FDs.
+    // Schema should be a struct with arity & FDs for each Rel. Map<Rel, RelInfo>?
     // Database trait should have count, rows and schema() -> Rc<Schema>.
-    type RelId: Eq + Hash + Clone;
-    fn arity(&self, r: Self::RelId) -> usize;
-    fn count(&self, r: Self::RelId) -> usize;
+    type Rel: Eq + Hash + Clone; // relation identifier.
+    fn arity(&self, r: Self::Rel) -> usize;
+    fn count(&self, r: Self::Rel) -> usize;
     // This assumes a row-oriented representation. for a columnar representation, maybe
     // Item = &[&Value], a slice of pointers to entries in each column?
-    fn rows(&self, r: Self::RelId) -> impl Iterator<Item = &[Value]>;
+    fn rows(&self, r: Self::Rel) -> impl Iterator<Item = &[Value]>;
 }
 
-pub struct Query<Db, Var, Op = Box<dyn Operator<Var>>> where
-    Db: Database,
-    Var: Eq + Hash + Copy,
-    Op: Operator<Var>,
-{
+pub struct Query<Var, Rel, Op = Rc<dyn Operator>> {
     pub vars: Vec<Var>,
+    pub atoms: Vec<Atom<Rel, Var>>,      // relational atoms
+    pub operators: Vec<OpCall<Op, Var>>, // computational operators
     // We separate relational Atoms from Operators here because the planner & execution
     // engine treat them differently. It's possible we could unify them with a redesign of
     // what query plans look like, but it doesn't seem obvious how.
@@ -97,25 +96,32 @@ pub struct Query<Db, Var, Op = Box<dyn Operator<Var>>> where
     // Atoms get tries built for them; operators don't.
     //
     // Atoms get consulted on every variable they touch; operators, for now, only on the
-    // last one (see "Limitations of this trait for computational atoms" below).
+    // last one (see "Limitations of this trait for operators" below).
     //
     // Because we separate atoms from operators, we only pay dispatch overhead for
     // operators; queries without operators don't pay.
-    pub atoms: Vec<Atom<Db::RelId, Var>>,
-    pub operators: Vec<Op>,
 }
 
-// TODO: how do we represent constants in atoms?
-pub struct Atom<RelId, Var> {
-    pub relation: RelId,
+pub struct Atom<Rel, Var> {
+    pub relation: Rel,
+    pub vars: Vec<Var>,         // Invariant: vars.len() == db.arity(relation)
+    // TODO: how do we represent constants in atoms?
+}
+
+pub struct OpCall<Op, Var> {
+    pub op: Op,
     pub vars: Vec<Var>,
+    // Invariant: vars.len() == op.arity(). The first op.input_arity() vars are inputs. If
+    // op.has_output(), the last var is the output.
 }
 
-impl<Db: Database, Var: Eq+Hash+Copy, Op: Operator<Var>> Query<Db, Var, Op> {
+impl<Var: Eq+Hash+Copy, Rel: Eq+Hash+Copy, Op: Operator> Query<Var, Rel, Op> {
     #[allow(unreachable_code, dead_code, unused)]
-    fn self_check(&self, db: &Db) {
+    fn self_check<Db: Database<Rel = Rel>>(&self, db: &Db) {
         todo!("check: self.vars is distinct; no duplicates");
         todo!("check: every atom's length equals its relation's arity");
+        todo!("check: every operator's vars.len() == arity");
+        todo!("check: reject zero-variable operators (input_arity == 0 && !has_output), because we don't know how to plan them yet; add TODO comment that we ought to support them");
         // A query is grounded if all its vars are grounded. An atom grounds all its
         // variables. An operator grounds its output if its inputs are grounded. By
         // applying these rules to saturation we can find the grounded variables.
@@ -135,28 +141,61 @@ impl<Db: Database, Var: Eq+Hash+Copy, Op: Operator<Var>> Query<Db, Var, Op> {
 //
 // TODO: provide some examples that show how to do each of these.
 
-pub trait Operator<Var: Eq + Hash + Copy> {
-    fn inputs(&self) -> Vec<Var>;
-    fn output(&self) -> Option<Var>; // at most one output var!
-    // None -> failure. Some(x) -> success, output var value is x. If there is no output
-    // var, the value of x is irrelevant; just return Some(0xdeadbeef) or something.
+pub trait Operator {
+    fn input_arity(&self) -> usize;
+    fn has_output(&self) -> bool; // at most one output, for now.
+    fn arity(&self) -> usize { self.input_arity() + (self.has_output() as usize) }
+    // Precondition: args.len() == self.arity().
+    fn check(&self, args: &[Value]) -> bool;
+    // Precondition: self.has_output() && inputs.len() == self.input_arity().
     fn compute(&self, inputs: &[Value]) -> Option<Value>;
-    // Always returns true. Here to remind you to refactor when it stops being true.
-    fn inputs_uniquely_determine_outputs(&self) -> bool;
 }
 
-// Limitations of this trait for operators:
+#[allow(dead_code)]
+#[derive(Clone)]
+enum Empty {}                   // useful representation if your query has no operators.
+impl Operator for Empty {
+    #[inline] fn input_arity(&self) -> usize { match *self {} }
+    #[inline] fn has_output(&self) -> bool { match *self {} }
+    #[inline] fn check(&self, _: &[Value]) -> bool { match *self {} }
+    #[inline] fn compute(&self, _: &[Value]) -> Option<Value> { match *self {} }
+}
+
+// This impl lets us use Rc<dyn Operator> (the default) or Box<dyn Operator> as our Operator
+// representation in Queries. The plan clones operator handles (see C3 / QueryPlan), so the
+// default is Rc, which is cheap to clone.
+impl<Ptr> Operator for Ptr where
+    Ptr: std::ops::Deref<Target = dyn Operator>,
+{
+    fn input_arity(&self) -> usize { (**self).input_arity() }
+    fn has_output(&self) -> bool { (**self).has_output() }
+    fn arity(&self) -> usize { (**self).arity() }
+    fn check(&self, args: &[Value]) -> bool {
+        debug_assert!(args.len() == (**self).arity());
+        (**self).check(args)
+    }
+    fn compute(&self, inputs: &[Value]) -> Option<Value> {
+        debug_assert!(inputs.len() == (**self).input_arity());
+        (**self).compute(inputs)
+    }
+}
+
+// Limitations of our operator / OpCall representation:
 //
-// 0. Fixed input/output divison rather than offering multiple modes. Eg. in x = y, we
-//    treat x as input and y as output. It's sensible to also allow y as input and produce
-//    x as output, but we cannot represent this.
+// 0. Fixed input/output. Eg. if OpEq is an Operator for equality, then (x = y) can become:
+//
+//      OpCall { op: OpEq, vars: [x,y] }        which makes x input and y output
+//      OpCall { op: OpEq, vars: [y,x] }        which makes y input and x output
+//
+//    But we can't have one OpCall that represents both and leaves it up to the planner to
+//    decide which way information flows.
 //
 // 1. An operator must have 0 or 1 output variables.
 //
 // 2. Inputs must functionally determine the output.
 //
-// If you need these features, redesign this interface, and modify the variable order
-// picker and possibly also the representation of query plans.
+// To drop these restrictions we must redesign this interface and modify the variable
+// order picker and perhaps also the representation of query plans.
 //
 // The var order picker will exploit (2) by emitting output vars immediately when their
 // inputs become available. This is desirable only when the outputs are uniquely
@@ -192,36 +231,14 @@ pub trait Operator<Var: Eq + Hash + Copy> {
 //                              x,y         z           yes; ∀x,y ∃ at *most* one z
 //                              x,z         y           yes; ∀x,z ∃ at most one y
 //
-// The addition & string append cases are interesting examples of "multi-modal" relational
-// operators: given strings y,z we can compute x = y ++ z. But also: given x, we can ask
-// for all y ++ z = x, all "splittings" of it. Also: given x,y we can ask: is y a prefix
+// Addition & string append are good examples of operators with multiple possible
+// input-output modes. Given strings y,z we can compute x = y ++ z. But given x, we can
+// ask for all y ++ z = x, all "splittings" of it. And given x,y we can ask: is y a prefix
 // of x, and if so, what's the suffix?
 //
-// With our single-mode limitation, the mode (input/output division) gets hard-coded into
-// the atom and thus the query. This is probably okay for many queries, but it means the
-// variable order picker has less room to choose how to order computation.
-
-#[allow(dead_code)]
-enum Empty {}                   // useful representation if your query has no operators.
-impl<V: Eq+Hash+Copy> Operator<V> for Empty {
-    fn inputs(&self) -> Vec<V> { match *self {} }
-    fn output(&self) -> Option<V> { match *self {} }
-    fn compute(&self, _: &[Value]) -> Option<Value> { match *self {} }
-    fn inputs_uniquely_determine_outputs(&self) -> bool { match *self {} }
-}
-
-// This impl lets us use Box<dyn Operator> as our Operator representation in Queries.
-impl<Var, Ptr> Operator<Var> for Ptr where
-    Var: Eq+Hash+Copy,
-    Ptr: std::ops::Deref<Target = dyn Operator<Var>>,
-{
-    fn inputs(&self) -> Vec<Var> { (**self).inputs() }
-    fn output(&self) -> Option<Var> { (**self).output() }
-    fn compute(&self, inputs: &[Value]) -> Option<Value> { (**self).compute(inputs) }
-    fn inputs_uniquely_determine_outputs(&self) -> bool {
-        (**self).inputs_uniquely_determine_outputs()
-    }
-}
+// With our current approach the input/output mode is hard-coded into the OpCall and thus
+// the query. This is probably okay for many queries, but it means the variable order
+// picker has less room to choose how to order computation.
 
 // ==== ON IMPLEMENTING OPERATORS EFFICIENTLY ====
 //
@@ -335,7 +352,7 @@ impl Trie {
     // Trie::build() returns None if the trie is empty. This is necessary to distinguish
     // between Some(Trie::Leaf()), a trie containing an single empty tuple, and None, an
     // empty trie.
-    pub fn build<Db: Database>(db: &Db, rel: Db::RelId, shape: &IndexShape) -> Option<Trie> {
+    pub fn build<Db: Database>(db: &Db, rel: Db::Rel, shape: &IndexShape) -> Option<Trie> {
         // Preprocess `shape` into:
         //  - `level_to_col[k]` is the column that becomes trie level k.
         //  - `filters` are the columns carrying EqConst/EqColumn checks.
@@ -436,32 +453,74 @@ impl Trie {
 
 
 // ---------- QUERY PLANNING ----------
-pub struct QueryPlan<RelId> {
+pub struct QueryPlan<Rel, Op> {
     // Replaces query atoms by the shape of the index we need for them.
-    pub atoms: Vec<(RelId, IndexShape)>,
-    // One level per variable.
-    // levels[i] gives the indexes of the atoms which touch variable i.
-    pub levels: Vec<Vec<usize>>,
+    pub atoms: Vec<(Rel, IndexShape)>,
+    // One level per variable, in variable order. levels[i] describes what to do when we
+    // bind variable i: which atoms constrain it, and which operators to consult.
+    pub levels: Vec<Level<Op>>,
+}
+
+// Everything the executor needs to do at a single variable's level.
+#[derive(Clone)]
+pub struct Level<Op> {          // TODO: rename to VarPlan?
+    // An operator to propose a unique value for this variable. If None, we use the atom
+    // whose trie proposes the fewest values (has lowest fan-out).
+    //
+    // Once we have FDs and may know statically that a relation will propose exactly one
+    // value, this can become `enum Proposer { Atom(usize), Op(ProposeOp<Op>) }`.
+    pub proposer: Option<ProposeOp<Op>>,
+    // Operators used to filter bindings.
+    pub filters: Vec<FilterOp<Op>>,
+    // The indexes in QueryPlan.atoms of the atoms constraining this variable.
+    pub atoms: Vec<usize>,
+}
+
+#[derive(Clone)]
+pub struct ProposeOp<Op> {
+    pub op: Op,
+    // inputs[i] = index into variable order of the operators i^th input.
+    // If vars: &[Value] stores bindings in variable order, then we should call
+    // op.compute(&[vars[inputs[0]], ..., vars[inputs[n]]]).
+    pub inputs: Vec<usize>,
+    // output var is implicitly this level's variable.
+}
+
+#[derive(Clone)]
+pub struct FilterOp<Op> {
+    pub op: Op,
+    pub inputs: Vec<usize>, // prefix positions of the inputs, in compute()'s order.
+    // Where to find the operator's output value, if it has one:
+    //   Some(pos) => require compute(inputs) == Some(prefix[pos]) (the bound output matches),
+    //   None      => require compute(inputs).is_some()            (a pure filter, e.g. x <= y).
+    pub output: Option<usize>,
 }
 
 // For example, Query { vars: [x,y,z], atoms: [R(x,y), R(y,z)] }.plan() yields:
 // QueryPlan {
 //     atoms: [(R, [TrieLevel(0), TrieLevel(1)]),
 //             (R, [TrieLevel(0), TrieLevel(1)])],
-//     levels: [[0], [0,1], [1]],
+//     levels: [Level { atoms: [0],    proposer: None, filters: [] },
+//              Level { atoms: [0, 1], proposer: None, filters: [] },
+//              Level { atoms: [1],    proposer: None, filters: [] }],
 // }
+//
+// An operator, say `w = x + z` (inputs x,z; output w) with order [x,y,z,w], adds a fourth
+// level with no trie atoms:
+//
+//              Level { atoms: [], proposer: Some(ProposeOp { inputs: [0,2] }), filters: [] }
 //
 // TODO: some unit tests for Query::plan.
 // Try this, and the same with var order [y,x,z].
 // Try some with multiple uses of the same variable, or (once implemented) constants.
 
 // ========== TODO: review & cleanup this LLM code: ==========
-impl<Db, Var, Op> Query<Db, Var, Op> where
-    Db: Database,
+impl<Var, Rel, Op> Query<Var, Rel, Op> where
     Var: Eq + Hash + Copy,
-    Op: Operator<Var>,
+    Rel: Eq + Hash + Copy,
+    Op: Operator + Clone,
 {
-    pub fn plan(&self, order: &[Var]) -> QueryPlan<Db::RelId> {
+    pub fn plan(&self, order: &[Var]) -> QueryPlan<Rel, Op> {
         use IndexColumnShape::{EqColumn, TrieLevel};
 
         // TODO: check that order is a permutation of the query variables.
@@ -471,8 +530,10 @@ impl<Db, Var, Op> Query<Db, Var, Op> where
             order.iter().enumerate().map(|(i, &v)| (v, i)).collect();
         assert_eq!(order_pos.len(), order.len(), "variable order repeats a variable");
 
-        let mut atoms: Vec<(Db::RelId, IndexShape)> = Vec::with_capacity(self.atoms.len());
-        let mut levels: Vec<Vec<usize>> = vec![Vec::new(); order.len()];
+        let mut atoms: Vec<(Rel, IndexShape)> = Vec::with_capacity(self.atoms.len());
+        let mut levels: Vec<Level<Op>> = (0..order.len())
+            .map(|_| Level { atoms: Vec::new(), proposer: None, filters: Vec::new() })
+            .collect();
 
         for (a, atom) in self.atoms.iter().enumerate() {
             // first_col[v] = the first column of this atom where variable v appears
@@ -507,8 +568,50 @@ impl<Db, Var, Op> Query<Db, Var, Op> where
             }
 
             // This atom binds each of its distinct variables' order positions.
-            for &v in &distinct { levels[order_pos[&v]].push(a); }
+            for &v in &distinct { levels[order_pos[&v]].atoms.push(a); }
             atoms.push((atom.relation.clone(), shape));
+        }
+
+        // Each operator is consulted at the level of its *last* variable in `order` (the one
+        // with the greatest order position): by then every other var it touches is bound.
+        for opcall in &self.operators {
+            let op = &opcall.op;
+            let n_in = op.input_arity();
+            assert_eq!(opcall.vars.len(), n_in + op.has_output() as usize,
+                "operator vars don't match its arity (inputs first, then the output if any)");
+            assert!(!opcall.vars.is_empty(), "zero-variable operators are not supported");
+
+            // Order positions of the operator's variables (inputs first, then output).
+            let positions: Vec<usize> = opcall.vars.iter().map(|v| {
+                *order_pos.get(v).expect("every operator variable must appear in the variable order")
+            }).collect();
+            let last_pos = *positions.iter().max().unwrap();
+
+            let inputs: Vec<usize> = positions[..n_in].to_vec();
+            let output_pos: Option<usize> = op.has_output().then(|| positions[n_in]);
+
+            if output_pos == Some(last_pos) {
+                // Propose mode: the last var is the output. Claim the proposer slot if it's
+                // free; otherwise demote to a filter that checks against the proposed value.
+                let level = &mut levels[last_pos];
+                if level.proposer.is_none() {
+                    level.proposer = Some(ProposeOp { op: op.clone(), inputs });
+                } else {
+                    level.filters.push(FilterOp { op: op.clone(), inputs, output: Some(last_pos) });
+                }
+            } else {
+                // Check mode: the last var is one of the inputs (or the op has no output).
+                // Any output var is bound before this level.
+                levels[last_pos].filters.push(FilterOp { op: op.clone(), inputs, output: output_pos });
+            }
+        }
+
+        // Every variable needs a proposer: at least one trie atom binds it, or an operator
+        // proposes it. (Otherwise nothing generates candidate values for it.)
+        for (pos, level) in levels.iter().enumerate() {
+            assert!(!level.atoms.is_empty() || level.proposer.is_some(),
+                "variable at order position {pos} has no proposer: no atom binds it and no \
+                 operator proposes it");
         }
 
         QueryPlan { atoms, levels }
@@ -519,11 +622,11 @@ impl<Db, Var, Op> Query<Db, Var, Op> where
 
 // The built trie indexes, keyed by (relation, shape) so shared indexes are stored once.
 // A None value means the index is empty.
-pub type Indexes<RelId> = HashMap<(RelId, IndexShape), Option<Trie>>;
+pub type Indexes<Rel> = HashMap<(Rel, IndexShape), Option<Trie>>;
 
-impl<RelId: Eq + Hash + Clone> QueryPlan<RelId> {
-    pub fn build_indexes<Db: Database<RelId = RelId>>(&self, db: &Db) -> Indexes<RelId> {
-        let mut indexes: Indexes<RelId> = HashMap::new();
+impl<Rel: Eq+Hash+Clone, Op> QueryPlan<Rel, Op> {
+    pub fn build_indexes<Db: Database<Rel = Rel>>(&self, db: &Db) -> Indexes<Rel> {
+        let mut indexes: Indexes<Rel> = HashMap::new();
         for (rel, shape) in &self.atoms {
             indexes
                 .entry((rel.clone(), shape.clone()))
@@ -539,7 +642,9 @@ impl<RelId: Eq + Hash + Clone> QueryPlan<RelId> {
     // yielding nothing in execute_dfs(). This is ugly from a consumer's point of view.
     // Either unify these paths somehow or provide a way of running a query that papers
     // over the difference.
-    pub fn bind<'a>(&self, indexes: &'a Indexes<RelId>) -> Option<ExecutableQuery<'a>> {
+    pub fn bind<'a>(&self, indexes: &'a Indexes<Rel>) -> Option<ExecutableQuery<'a, Op>>
+        where Op: Clone
+    {
         let mut tries: Vec<&'a Trie> = Vec::with_capacity(self.atoms.len());
         for key in &self.atoms {
             match indexes.get(key) {
@@ -554,19 +659,16 @@ impl<RelId: Eq + Hash + Clone> QueryPlan<RelId> {
 
 
 // ---------- QUERY EXECUTION ----------
-pub struct ExecutableQuery<'a> {
+//
+// ExecutableQuery is like QueryPlan but replaces (RelId, IndexShape) atoms with pointers
+// to the actual trie indices. TODO: unify these into one struct with a parameter for the
+// representation of atoms.
+pub struct ExecutableQuery<'a, Op> {
     pub tries: Vec<&'a Trie>, // one trie per atom.
-    pub levels: Vec<Vec<usize>>,  // one level per variable
+    pub levels: Vec<Level<Op>>,  // one level per variable
     // Some of the trie pointers may be identical if atoms share indexes.
 }
 
-// A ExecutableQuery has one trie pointer per atom and one level per variable.
-//
-// levels[i]: bounds for variable i.
-// levels[i][j]: the trie which we should use to bound this variable.
-// Let t = tries[k] be a trie and d be its depth. Then `k` should occur exactly `d`
-// times in `levels`, each occurrence corresponding to one level of `t`.
-//
 // Example: Consider the query
 //
 //     E(x,y) E(y,z) E(z,x) with variable order x,y,z
@@ -576,16 +678,50 @@ pub struct ExecutableQuery<'a> {
 //
 //     fwd(x,y) fwd(y,z) bwd(x,z)
 //
-// Then this becomes:
+// Then this becomes (writing just the `atoms` of each level; no operators here):
 //
 //     ExecutableQuery {
 //         tries: [&fwd, &fwd, &bwd],
-//         levels: [[0,2],      // x ← fwd    ∩ bwd    = {x : ∃y,z. E(x,y) ∧ E(z,x)}
-//                  [0,1],      // y ← fwd[x] ∩ fwd    = {y : E(x,y) ∧ ∃z. E(y,z)}
-//                  [1,2]],     // z ← fwd[y] ∩ bwd[x] = {z : E(y,z) ∧ E(z,x) }
+//         levels[_].atoms: [[0,2],  // x ← fwd    ∩ bwd    = {x : ∃y,z. E(x,y) ∧ E(z,x)}
+//                           [0,1],  // y ← fwd[x] ∩ fwd    = {y : E(x,y) ∧ ∃z. E(y,z)}
+//                           [1,2]], // z ← fwd[y] ∩ bwd[x] = {z : E(y,z) ∧ E(z,x) }
 //     }
 
-impl<'a> ExecutableQuery<'a> {
+impl<'a> ExecutableQuery<'a, Rc<dyn Operator>> {
+    // Build an operator-free executable query from tries and per-variable atom lists — a
+    // convenience for hand-written plans (tests, benchmarks) before the planner is wired up
+    // everywhere. Equivalent to a QueryPlan whose levels have no operators.
+    pub fn new(tries: Vec<&'a Trie>, levels: Vec<Vec<usize>>) -> Self {
+        ExecutableQuery {
+            tries,
+            levels: levels.into_iter()
+                .map(|atoms| Level { atoms, proposer: None, filters: Vec::new() })
+                .collect(),
+        }
+    }
+}
+
+// Our query execution strategy is depth-first traversal of the implicit result trie with
+// one level for each var in variable order. This struct contains the state needed for
+// this process.
+struct QueryDfsState<'a, Op, F> {
+    callback: F,
+    levels: &'a [Level<Op>],
+    // Partial solution: prefix[i] = value of ith variable.
+    prefix: Vec<Value>,
+    // For each atom, the data of the node in the corresponding trie that we're currently
+    // at. (If the trie bottoms-out, it doesn't matter what we store here - we don't read
+    // Leafs.)
+    tries: Vec<&'a TrieMap>,
+    // Trie node stack. When entering a level we push the current node of each
+    // trie in that level; on leaving we restore them.
+    saved: Vec<&'a TrieMap>,
+    // Scratch buffers used to avoid repeated allocation:
+    children: Vec<&'a Trie>,    // trie children for descending to next level
+    input_buf: Vec<Value>,      // values for input to an Operator
+}
+
+impl<'a, Op: Operator> ExecutableQuery<'a, Op> {
     // Execute via depth-first backtracking.
     pub fn execute_dfs<F>(&self, f: F) where F: FnMut(&[Value]) {
         // TODO: add a 0-level query test case.
@@ -602,6 +738,7 @@ impl<'a> ExecutableQuery<'a> {
             prefix: Vec::with_capacity(self.levels.len()),
             children: Vec::new(),
             saved: Vec::new(),
+            input_buf: Vec::new(),
             callback: f,
         }.execute(0)
     }
@@ -615,72 +752,117 @@ impl<'a> ExecutableQuery<'a> {
     }
 }
 
-struct QueryDfsState<'a, F> {
-    callback: F,
-    levels: &'a Vec<Vec<usize>>,
-    // Partial solution: prefix[i] = value of ith variable.
-    prefix: Vec<Value>,
-    // For each atom, the data of the node in the corresponding trie that we're currently
-    // at. (If the trie bottoms-out, it doesn't matter what we store here - we don't read
-    // Leafs.)
-    tries: Vec<&'a TrieMap>,
-    // Trie node stack. When entering a level we push the current node of each
-    // trie in that level; on leaving we restore them.
-    saved: Vec<&'a TrieMap>,
-    // Scratch buffer used to avoid per-call allocation.
-    children: Vec<&'a Trie>,
-}
+// ========== TODO: do a review/simplification pass over this LLM-modified code ==========
+impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
+    // Copy an operator's input values out of the current prefix into `input_buf`.
+    fn gather(&mut self, inputs: &[usize]) {
+        self.input_buf.clear();
+        for &pos in inputs { self.input_buf.push(self.prefix[pos]); }
+    }
 
-impl<'a, F: FnMut(&[Value])> QueryDfsState<'a, F> {
+    // Run this level's check-only operators against the current (now fully bound) prefix.
+    fn filters_pass(&mut self, filters: &[FilterOp<Op>]) -> bool {
+        for f in filters {
+            self.gather(&f.inputs);
+            match f.op.compute(&self.input_buf) {
+                None => return false, // failed: pure filter rejected, or no output to match.
+                Some(out) => match f.output {
+                    // A bound output must equal what the operator computed.
+                    Some(pos) if out != self.prefix[pos] => return false,
+                    _ => {}
+                },
+            }
+        }
+        true
+    }
+
     fn execute(&mut self, level_idx: usize) {
-        if level_idx == self.levels.len() {
+        // Copy the `&'a` levels slice out so `level` borrows the plan, not `self`, and can be
+        // held across the `&mut self` calls below.
+        let levels = self.levels;
+        if level_idx == levels.len() {
             (self.callback)(&self.prefix);
             return;
         }
-        let level: &Vec<usize> = &self.levels[level_idx];
+        let level: &'a Level<Op> = &levels[level_idx];
         // Snapshot the current node of each trie in this level onto the `saved` stack so we
         // can restore them when we're done; `mark` is where this level's slice begins.
         let mark = self.saved.len();
-        for &trie_idx in level { self.saved.push(self.tries[trie_idx]); }
-        // The proposer is the trie in this level with the fewest children. We read each
-        // level trie's map off the `saved` stack (positions mark..mark+width).
-        let width = level.len();
-        let proposer_pos: usize = (0..width)
-            .min_by_key(|&pos| self.saved[mark + pos].len())
-            .expect("Empty level - every query variable must be used in some atom!");
+        for &trie_idx in &level.atoms { self.saved.push(self.tries[trie_idx]); }
+        let width = level.atoms.len();
 
-        let proposer_map = self.saved[mark + proposer_pos];
-        'keys: for (key, child) in proposer_map {
-            self.children.clear();
-            // Look up this key in each trie at this level. If any trie lacks this key,
-            // skip to the next key.
-            for pos in 0..width {
-                if pos == proposer_pos { self.children.push(child); continue; }
-                match self.saved[mark + pos].get(key) {
-                    Some(child) => self.children.push(child),
-                    None => continue 'keys,
+        match &level.proposer {
+            // An operator proposes a single value for this variable; every trie atom in this
+            // level (and every filter) is a checker.
+            Some(prop) => {
+                self.gather(&prop.inputs);
+                let key = match prop.op.compute(&self.input_buf) {
+                    Some(v) => v,
+                    None => { self.restore(level, mark); return; } // proposal failed.
+                };
+                // Look up the proposed key in each level trie; a miss kills this branch.
+                self.children.clear();
+                for pos in 0..width {
+                    match self.saved[mark + pos].get(&key) {
+                        Some(child) => self.children.push(child),
+                        None => { self.restore(level, mark); return; }
+                    }
+                }
+                self.descend(level, level_idx, key);
+            }
+            // No operator proposer: the trie with the fewest children proposes, and we
+            // intersect the proposed key against the other level tries. We read each level
+            // trie's map off the `saved` stack (positions mark..mark+width).
+            None => {
+                let proposer_pos: usize = (0..width)
+                    .min_by_key(|&pos| self.saved[mark + pos].len())
+                    .expect("no proposer at this level - the planner should have caught this");
+                let proposer_map = self.saved[mark + proposer_pos];
+                'keys: for (key, child) in proposer_map {
+                    self.children.clear();
+                    // Look up this key in each trie at this level. If any trie lacks this
+                    // key, skip to the next key.
+                    for pos in 0..width {
+                        if pos == proposer_pos { self.children.push(child); continue; }
+                        match self.saved[mark + pos].get(key) {
+                            Some(child) => self.children.push(child),
+                            None => continue 'keys,
+                        }
+                    }
+                    self.descend(level, level_idx, *key);
                 }
             }
-
-            // We've found a match! Write the children into `self.tries` and recurse.
-            self.prefix.push(*key);
-            for (pos, &trie_idx) in level.iter().enumerate() {
-                // A Leaf child bottoms out here and is never read again, so we skip it.
-                if let Trie::Node(map) = self.children[pos] { self.tries[trie_idx] = map; }
-            }
-            self.execute(level_idx + 1);
-            let popped = self.prefix.pop();
-            debug_assert!(popped == Some(*key));
         }
 
-        // Restore every trie in this level to the parent node the caller left it at, then
-        // pop this level's slice off the `saved` stack.
-        for (pos, &trie_idx) in level.iter().enumerate() {
+        self.restore(level, mark);
+    }
+
+    // Commit `key` as this level's value: descend each level trie to its child under `key`,
+    // run the level's filters, and recurse if they all pass. Assumes `self.children` holds
+    // the child of each level atom (in `level.atoms` order).
+    fn descend(&mut self, level: &'a Level<Op>, level_idx: usize, key: Value) {
+        self.prefix.push(key);
+        for (pos, &trie_idx) in level.atoms.iter().enumerate() {
+            // A Leaf child bottoms out here and is never read again, so we skip it.
+            if let Trie::Node(map) = self.children[pos] { self.tries[trie_idx] = map; }
+        }
+        if self.filters_pass(&level.filters) {
+            self.execute(level_idx + 1);
+        }
+        let popped = self.prefix.pop();
+        debug_assert!(popped == Some(key));
+    }
+
+    // Restore every trie in this level to the parent node the caller left it at, then pop
+    // this level's slice off the `saved` stack.
+    fn restore(&mut self, level: &'a Level<Op>, mark: usize) {
+        for (pos, &trie_idx) in level.atoms.iter().enumerate() {
             self.tries[trie_idx] = self.saved[mark + pos];
         }
         self.saved.truncate(mark);
     }
 }
+// ========== END code need review/simplifying ==========
 
 
 // ---------- UNIT TESTS (Claude-generated) ----------
