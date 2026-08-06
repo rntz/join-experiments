@@ -723,7 +723,7 @@ impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
         for &pos in positions { self.input_buf.push(self.prefix[pos]); }
     }
 
-    // Run this level's filter operators against the current (now fully bound) prefix.
+    // Run this level's filter operators.
     fn filters_pass(&mut self, filters: &[OpCall<Op, usize>]) -> bool {
         for f in filters {
             self.gather(&f.vars);
