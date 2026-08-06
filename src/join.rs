@@ -108,11 +108,13 @@ pub struct Atom<Rel, Var> {
     // TODO: how do we represent constants in atoms?
 }
 
+#[derive(Clone)]
 pub struct OpCall<Op, Var> {
     pub op: Op,
     pub vars: Vec<Var>,
     // Invariant: vars.len() == op.arity(). The first op.input_arity() vars are inputs. If
-    // op.has_output(), the last var is the output.
+    // op.has_output(), the last var is the output. In a Query the `vars` are query Vars;
+    // in a QueryPlan they are indexes into the variable order (OpCall<Op, usize>).
 }
 
 impl<Var: Eq+Hash+Copy, Rel: Eq+Hash+Clone, Op: Operator> Query<Var, Rel, Op> {
@@ -464,36 +466,17 @@ pub struct QueryPlan<Rel, Op> {
 // Everything the executor needs to do at a single variable's level.
 #[derive(Clone)]
 pub struct Level<Op> {          // TODO: rename to VarPlan?
-    // An operator to propose a unique value for this variable. If None, we use the atom
-    // whose trie proposes the fewest values (has lowest fan-out).
+    // An operator to propose a unique value for this variable, computed from its inputs
+    // (its output is this variable). If None, we propose from the trie node with the
+    // fewest children.
     //
     // Once we have FDs and may know statically that a relation will propose exactly one
-    // value, this can become `enum Proposer { Atom(usize), Op(ProposeOp<Op>) }`.
-    pub proposer: Option<ProposeOp<Op>>,
-    // Operators used to filter bindings.
-    pub filters: Vec<FilterOp<Op>>,
+    // value, this can become `enum Proposer { Atom(usize), Op(OpCall<Op, usize>) }`.
+    pub proposer: Option<OpCall<Op, usize>>,
+    // Operators that filter bindings.
+    pub filters: Vec<OpCall<Op, usize>>,
     // The indexes in QueryPlan.atoms of the atoms constraining this variable.
     pub atoms: Vec<usize>,
-}
-
-#[derive(Clone)]
-pub struct ProposeOp<Op> {
-    pub op: Op,
-    // inputs[i] = index into variable order of the operators i^th input.
-    // If vars: &[Value] stores bindings in variable order, then we should call
-    // op.compute(&[vars[inputs[0]], ..., vars[inputs[n]]]).
-    pub inputs: Vec<usize>,
-    // output var is implicitly this level's variable.
-}
-
-#[derive(Clone)]
-pub struct FilterOp<Op> {
-    pub op: Op,
-    pub inputs: Vec<usize>, // prefix positions of the inputs, in compute()'s order.
-    // Where to find the operator's output value, if it has one:
-    //   Some(pos) => require compute(inputs) == Some(prefix[pos]) (the bound output matches),
-    //   None      => require compute(inputs).is_some()            (a pure filter, e.g. x <= y).
-    pub output: Option<usize>,
 }
 
 // For example, Query { vars: [x,y,z], atoms: [R(x,y), R(y,z)] }.plan() yields:
@@ -508,7 +491,7 @@ pub struct FilterOp<Op> {
 // An operator, say `w = x + z` (inputs x,z; output w) with order [x,y,z,w], adds a fourth
 // level with no trie atoms:
 //
-//              Level { atoms: [], proposer: Some(ProposeOp { inputs: [0,2] }), filters: [] }
+//              Level { atoms: [], proposer: Some(OpCall { vars: [0,2,3] }), filters: [] }
 //
 // TODO: some unit tests for Query::plan.
 // Try this, and the same with var order [y,x,z].
@@ -587,22 +570,16 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
             }).collect();
             let last_pos = *positions.iter().max().unwrap();
 
-            let inputs: Vec<usize> = positions[..n_in].to_vec();
             let output_pos: Option<usize> = op.has_output().then(|| positions[n_in]);
 
-            if output_pos == Some(last_pos) {
-                // Propose mode: the last var is the output. Claim the proposer slot if it's
-                // free; otherwise demote to a filter that checks against the proposed value.
-                let level = &mut levels[last_pos];
-                if level.proposer.is_none() {
-                    level.proposer = Some(ProposeOp { op: op.clone(), inputs });
-                } else {
-                    level.filters.push(FilterOp { op: op.clone(), inputs, output: Some(last_pos) });
-                }
+            // Propose if the output is this level's variable (the last one to be bound) and
+            // the proposer slot is still free; otherwise this operator is a filter.
+            let level = &mut levels[last_pos];
+            let step = OpCall { op: op.clone(), vars: positions };
+            if output_pos == Some(last_pos) && level.proposer.is_none() {
+                level.proposer = Some(step);
             } else {
-                // Check mode: the last var is one of the inputs (or the op has no output).
-                // Any output var is bound before this level.
-                levels[last_pos].filters.push(FilterOp { op: op.clone(), inputs, output: output_pos });
+                level.filters.push(step);
             }
         }
 
@@ -740,24 +717,17 @@ impl<'a, Op: Operator> ExecutableQuery<'a, Op> {
 
 // ========== TODO: do a review/simplification pass over this LLM-modified code ==========
 impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
-    // Copy an operator's input values out of the current prefix into `input_buf`.
-    fn gather(&mut self, inputs: &[usize]) {
+    // Copy the given prefix positions into `input_buf`, in order.
+    fn gather(&mut self, positions: &[usize]) {
         self.input_buf.clear();
-        for &pos in inputs { self.input_buf.push(self.prefix[pos]); }
+        for &pos in positions { self.input_buf.push(self.prefix[pos]); }
     }
 
-    // Run this level's check-only operators against the current (now fully bound) prefix.
-    fn filters_pass(&mut self, filters: &[FilterOp<Op>]) -> bool {
+    // Run this level's filter operators against the current (now fully bound) prefix.
+    fn filters_pass(&mut self, filters: &[OpCall<Op, usize>]) -> bool {
         for f in filters {
-            self.gather(&f.inputs);
-            match f.op.compute(&self.input_buf) {
-                None => return false, // failed: pure filter rejected, or no output to match.
-                Some(out) => match f.output {
-                    // A bound output must equal what the operator computed.
-                    Some(pos) if out != self.prefix[pos] => return false,
-                    _ => {}
-                },
-            }
+            self.gather(&f.vars);
+            if !f.op.check(&self.input_buf) { return false; }
         }
         true
     }
@@ -781,7 +751,9 @@ impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
             // An operator proposes a single value for this variable; every trie atom in this
             // level (and every filter) is a checker.
             Some(prop) => {
-                self.gather(&prop.inputs);
+                // The proposer's output is this level's variable; compute it from the inputs.
+                debug_assert_eq!(prop.vars.last(), Some(&level_idx));
+                self.gather(&prop.vars[..prop.vars.len() - 1]);
                 let key = match prop.op.compute(&self.input_buf) {
                     Some(v) => v,
                     None => { self.restore(level, mark); return; } // proposal failed.
