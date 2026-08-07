@@ -362,11 +362,15 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
     Op: Operator + Clone,
 {
     pub fn plan(&self, order: &[Var]) -> QueryPlan<Rel, Op> {
+        // Given a var order, we go through every atom & operator in the query and assign
+        // it to the levels it ought to be in. For relational atoms, these are the levels
+        // corresponding to its variables; for an operator, only the last level that
+        // touches its variables.
         use IndexColumnShape::{EqColumn, TrieLevel};
 
         // TODO: check that order is a permutation of the query variables.
 
-        // order_pos[v] = position of variable v in the global variable order.
+        // order_pos[v] = position of variable v in the variable order.
         let order_pos: HashMap<Var, usize> =
             order.iter().enumerate().map(|(i, &v)| (v, i)).collect();
         assert_eq!(order_pos.len(), order.len(), "variable order repeats a variable");
@@ -376,21 +380,23 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
             .map(|_| Level { atoms: Vec::new(), proposer: None, filters: Vec::new() })
             .collect();
 
-        // For each atom, put it in the appropriate levels.
-        for (a, atom) in self.atoms.iter().enumerate() {
+        // For each atom, compute its IndexShape and put it in the appropriate levels.
+        //
+        // TODO: factor out computing the IndexShape into a helper!
+        for (atom_idx, atom) in self.atoms.iter().enumerate() {
             // first_col[v] = the first column of this atom where variable v appears
-            // (or_insert keeps the earliest column). `distinct` is its key set; its order
+            // (or_insert keeps the earliest column). `atom_vars` is its key set; its order
             // doesn't matter — we sort it for levels and otherwise treat it as a set.
             let mut first_col: HashMap<Var, usize> = HashMap::default();
             for (col, &v) in atom.vars.iter().enumerate() {
                 first_col.entry(v).or_insert(col);
             }
-            let distinct: Vec<Var> = first_col.keys().copied().collect();
+            let atom_vars: Vec<Var> = first_col.keys().copied().collect();
 
-            // Assign each distinct variable a trie level: its rank among this atom's
+            // Assign each atom_vars variable a trie level: its rank among this atom's
             // variables when sorted by global order position. This is what keeps the atom's
             // trie aligned with the global binding order.
-            let mut by_order = distinct.clone();
+            let mut by_order = atom_vars.clone();
             by_order.sort_by_key(|v| {
                 *order_pos.get(v).expect("every atom variable must appear in the variable order")
             });
@@ -409,8 +415,8 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
                 }
             }
 
-            // This atom binds each of its distinct variables' order positions.
-            for &v in &distinct { levels[order_pos[&v]].atoms.push(a); }
+            // This atom binds each of its variables' order positions.
+            for &v in &atom_vars { levels[order_pos[&v]].atoms.push(atom_idx); }
             atoms.push((atom.pred.clone(), shape));
         }
 
