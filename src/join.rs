@@ -2,7 +2,9 @@ use std::hash::Hash;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::Value;
 use crate::hash::Map;
+use crate::ops::Operator;
 
 // ---------- NEXT THINGS TO IMPLEMENT ----------
 //
@@ -61,11 +63,6 @@ use crate::hash::Map;
 
 
 // ---------- DATABASES AND QUERIES ----------
-//
-// I'm assuming we intern everything up front. This makes things simpler than figuring out
-// where to put tags to minimize tag-checking overhead.
-pub type Value = usize;         // needs to be Copy + Hash + Eq
-
 // A database is something which has relations and can tabulate them.
 //
 // TODO: how do I incorporate functional dependency information here?
@@ -85,6 +82,8 @@ pub trait Database {
     fn rows(&self, r: Self::Rel) -> impl Iterator<Item = &[Value]>;
 }
 
+// Var, Rel, Op stand for variable, relation, and computational operator identifiers.
+// (See also `Operator` trait, below.)
 pub struct Query<Var, Rel, Op = Rc<dyn Operator>> {
     pub vars: Vec<Var>,
     pub atoms: Vec<Atom<Rel, Var>>,      // relational atoms
@@ -132,159 +131,6 @@ impl<Var: Eq+Hash+Copy, Rel: Eq+Hash+Clone, Op: Operator> Query<Var, Rel, Op> {
         todo!("check: query is grounded.");
     }
 }
-
-
-// ---------- OPERATORS, or ATOMS THAT COMPUTE ----------
-
-// We parameterize Query over an Operator type because it lets us choose how to dispatch
-// on operators. If we have a concrete `enum MyOps { ... }` for all the query operators we
-// need, we can implement `Operator MyOps` by matching on this enum for performance
-// (especially on WebAssembly where indirect calls through function pointers may be extra
-// slow, according to Claude). But we can also use `Box<dyn Operator>` to mix-and-match
-// Operator impls without writing a big enum & match.
-//
-// TODO: provide some examples that show how to do each of these.
-
-pub trait Operator {
-    fn input_arity(&self) -> usize;
-    fn has_output(&self) -> bool; // at most one output, for now.
-    fn arity(&self) -> usize { self.input_arity() + (self.has_output() as usize) }
-    // TODO: more comment here explaining how check() vs compute() work.
-    // Precondition: args.len() == self.arity().
-    fn check(&self, args: &[Value]) -> bool;
-    // Precondition: self.has_output() && inputs.len() == self.input_arity().
-    fn compute(&self, inputs: &[Value]) -> Option<Value>;
-}
-
-#[allow(dead_code)]
-#[derive(Clone)]
-enum Empty {}                   // useful representation if your query has no operators.
-impl Operator for Empty {
-    #[inline] fn input_arity(&self) -> usize { match *self {} }
-    #[inline] fn has_output(&self) -> bool { match *self {} }
-    #[inline] fn check(&self, _: &[Value]) -> bool { match *self {} }
-    #[inline] fn compute(&self, _: &[Value]) -> Option<Value> { match *self {} }
-}
-
-// This impl lets us use Rc<dyn Operator> (the default) or Box<dyn Operator> as our Operator
-// representation in Queries. The plan clones operator handles (see C3 / QueryPlan), so the
-// default is Rc, which is cheap to clone.
-impl<Ptr> Operator for Ptr where
-    Ptr: std::ops::Deref<Target = dyn Operator>,
-{
-    fn input_arity(&self) -> usize { (**self).input_arity() }
-    fn has_output(&self) -> bool { (**self).has_output() }
-    fn arity(&self) -> usize { (**self).arity() }
-    fn check(&self, args: &[Value]) -> bool {
-        debug_assert!(args.len() == (**self).arity());
-        (**self).check(args)
-    }
-    fn compute(&self, inputs: &[Value]) -> Option<Value> {
-        debug_assert!(inputs.len() == (**self).input_arity());
-        (**self).compute(inputs)
-    }
-}
-
-// Limitations of our operator / computational-atom representation:
-//
-// 0. Fixed input/output. Eg. if OpEq is an Operator for equality, then (x = y) can become:
-//
-//      Atom { pred: OpEq, vars: [x,y] }        which makes x input and y output
-//      Atom { pred: OpEq, vars: [y,x] }        which makes y input and x output
-//
-//    But we can't have one atom that represents both and leaves it up to the planner to
-//    decide which way information flows.
-//
-// 1. An operator must have 0 or 1 output variables.
-//
-// 2. Inputs must functionally determine the output.
-//
-// To drop these restrictions we must redesign this interface and modify the variable
-// order picker and perhaps also the representation of query plans.
-//
-// The var order picker will exploit (2) by emitting output vars immediately when their
-// inputs become available. This is desirable only when the outputs are uniquely
-// determined by the inputs!
-//
-// The query plan/executor exploits (1) by only including/consulting a operator on the
-// level for its last variable. (If that final variable is its output, the atom can
-// propose values; if it is one of its inputs, it can check consistency.) But if we had
-// multiple output variables, OR if the output var were not guaranteed to be examined
-// immediately after the inputs (if we add operators whose outputs are not unique), then
-// we should consult the atom as soon as all input are bound, and again whenever we pick
-// an output var. This considerably complicates the interaction between operators and the
-// rest of the query.
-//
-// Here are some examples of operators we might want, and their properties.
-//
-//              SYNTAX          INPUTS      OUTPUTS     FD?
-// INEQUALITY   x ≤ y           x,y         none        trivial
-//
-// CONSTANT     x = 2           none        x           yes
-//
-// EQUALITY     x = y           x           y           yes, ∀x ∃!x  x=y
-//                              y           x           yes, ∀y ∃!x  x=y
-//
-// RANGE        i ∈ range(n,m)  n,m         i           no
-//
-// ADDITION     x = y + z       y,z         x           yes; ∀y,z ∃!x  x = y + z
-//                              x,z         y           yes; at most one y for fixed (x,z)
-//                              x,y         z           yes; at most one z for fixed (x,y)
-//
-// STRING       x = y ++ z      y,z         x           yes; ∀y,z ∃!x
-// APPEND                       x           y,z         no; many y, z yield same x = y ++ z
-//                              x,y         z           yes; ∀x,y ∃ at *most* one z
-//                              x,z         y           yes; ∀x,z ∃ at most one y
-//
-// Addition & string append are good examples of operators with multiple possible
-// input-output modes. Given strings y,z we can compute x = y ++ z. But given x, we can
-// ask for all y ++ z = x, all "splittings" of it. And given x,y we can ask: is y a prefix
-// of x, and if so, what's the suffix?
-//
-// With our current approach the input/output mode is hard-coded into the atom and thus
-// the query. This is probably okay for many queries, but it means the variable order
-// picker has less room to choose how to order computation.
-
-// ==== ON IMPLEMENTING OPERATORS EFFICIENTLY ====
-//
-// It's possible dispatch overhead for operators will become a bottleneck for query
-// execution in some cases. If so, it's worth investigating Frank McSherry's approach to
-// them, which attempts to dispatch as infrequently as possible by having operators
-// process large "chunks" of data at a time.
-//
-// He does this via a breadth-first approach to solving WCOJs, maintaining a vector of
-// partial solutions for the first N variables, then extending to partial solutions for
-// N+1, etc. To see an example of this, look at the examples/join-v1.rs prototype. See
-// also his blog post:
-//
-// https://github.com/frankmcsherry/blog/blob/master/posts/2025-12-23.md
-//
-// Email me (Michael Arntzenius, daekharel@gmail.com) if you're having trouble
-// understanding it or how it relates to this implementation; or email Frank and cc me,
-// he's quite friendly (but won't know anything about this implementation).
-//
-// Note that it's a little more complicated than just switching depth for breadth. The
-// Claude-generated bfs in join_bfs.rs, for instance, is not Frank-like and would not
-// improve performance. Also, breadth-first search can be very memory hungry if there are
-// lots of results; if this is a problem it might be worth doing something in-between BFS
-// & DFS involving fixed-length chunks of partial solutions.
-//
-// Our current approach is depth-first and more like a hash-based version of LFTJ. You can
-// read the LFTJ paper if you like, but this code is probably easier to understand.
-//
-// LFTJ paper: https://arxiv.org/abs/1210.0481
-//
-// LFTJ uses a "trie iterator" interface. If you line things up right it's possible for
-// many computational atoms to satisfy this interface. You can think of this as
-// materializing the trie lazily/on-demand. Of course, computational atoms can't
-// materialize levels of the trie that correspond to their *input* variables, but they
-// can be told to "seek to position x" (this assigns that input variable to x). As long
-// as *some* atom/trie iterator can materialize a list of candidates for this variable,
-// things work out eventually.
-//
-// See section 3.4, p6, list item 1, which discusses equality atoms, and section 6.2,
-// numbered list, elements 2-3 ("Functions", "Primitives") and 6 ("Ranges"). (Note that
-// "Function" does NOT mean computational function here: it means functional dependency.)
 
 
 // ---------- TRIE INDEXES ----------

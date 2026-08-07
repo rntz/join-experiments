@@ -5,7 +5,7 @@
 // lookup; the fast FxHash only matters inside the trie indexes.
 use std::collections::HashMap;
 
-use crate::join::{Database, Value};
+use crate::{Value, Database};
 
 pub struct VecDb {
     // name -> (arity, rows)

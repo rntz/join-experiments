@@ -13,15 +13,20 @@ macro_rules! print_flush {
     }};
 }
 
-pub mod graph;
-pub mod hash;
-pub mod join;
-pub mod join_bfs;
-pub mod vec_db;
+pub mod value;                // value representation
+pub mod hash;                 // FxHash and Map/Set based on hash
+pub mod ops;                  // computational operators
+pub mod join;                 // databases, queries, query plans & execution
+pub mod join_bfs;             // breadth-first query execution prototype
+// these are mainly for tests & benchmarking:
+pub mod vec_db;               // in-memory vec-of-row-vectors database
+pub mod graph;                // graph db utilities
 
+pub use value::Value;
+pub use ops::Operator;
 pub use join::{
-    Atom, Database, ExecutableQuery, IndexColumnShape, Indexes, Level, Operator,
-    QueryPlan, Query, Trie, Value,
+    Atom, Database, ExecutableQuery, IndexColumnShape, Indexes, Level,
+    QueryPlan, Query, Trie,
 };
 pub use vec_db::VecDb;
 pub use graph::{

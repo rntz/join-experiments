@@ -2,8 +2,7 @@
 use std::fs::File;
 
 use crate::hash::{Map, Set};
-use crate::join::Value;
-use crate::print_flush;
+use crate::{print_flush, Value};
 use crate::vec_db::VecDb;
 
 // Build a Database with a single binary relation "E" from an edge list.
