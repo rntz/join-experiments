@@ -30,5 +30,6 @@ pub use join::{
 };
 pub use vec_db::VecDb;
 pub use graph::{
-    binary_triangles_directed, binary_triangles_undirected, edge_db, snap_load, to_low_high,
+    binary_triangles_directed, binary_triangles_undirected, edge_db, snap_load, symmetrize,
+    to_low_high,
 };

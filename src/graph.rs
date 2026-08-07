@@ -92,6 +92,19 @@ pub fn to_low_high(edges: &[(Value, Value)]) -> Vec<(Value, Value)> {
     v
 }
 
+// Make an undirected simple graph: drop self-loops and store both orientations of every
+// edge. Sorted & deduped, so the result is symmetric (E(a,b) iff E(b,a)) with no diagonal.
+// Unlike to_low_high this keeps the graph symmetric rather than baking in an orientation.
+pub fn symmetrize(edges: &[(Value, Value)]) -> Vec<(Value, Value)> {
+    let mut v: Vec<(Value, Value)> = edges.iter()
+        .filter(|&&(a, b)| a != b)
+        .flat_map(|&(a, b)| [(a, b), (b, a)])
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
 // Finds undirected triangles over a low->high edge list: all {a < b < c} with edges
 // a->b, b->c, a->c. Uses a binary join; sorts results.
 pub fn binary_triangles_undirected(edges: &[(Value, Value)]) -> Vec<Vec<Value>> {

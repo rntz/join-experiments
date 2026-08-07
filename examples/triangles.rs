@@ -4,16 +4,24 @@
 //     cargo run --release --example triangles
 //
 // Use --release or it will be slow.
+use std::rc::Rc;
 use std::time::Instant;
 
+use rntz_joins::op::Le;
 use rntz_joins::{
-    binary_triangles_directed, binary_triangles_undirected, edge_db, snap_load, to_low_high,
-    Atom, ExecutableQuery, Operator, Query, Value,
+    binary_triangles_directed, binary_triangles_undirected, edge_db, snap_load, symmetrize,
+    to_low_high, Atom, ExecutableQuery, Operator, Query, Value,
 };
 
 // An atom over relation `rel` with the given variables.
 fn atom(rel: &'static str, vars: &[char]) -> Atom<&'static str, char> {
     Atom { pred: rel, vars: vars.to_vec() }
+}
+
+// A computational atom applying operator `o` to vars (inputs first, then output if any).
+fn op_atom(o: impl Operator + 'static, vars: &[char]) -> Atom<Rc<dyn Operator>, char> {
+    let pred: Rc<dyn Operator> = Rc::new(o);
+    Atom { pred, vars: vars.to_vec() }
 }
 
 fn main() {
@@ -36,6 +44,13 @@ fn main() {
         snap_triangles_undirected(name, None);
     }
 
+    // Same canonical triangles as above, but computed by symmetrizing the graph and using
+    // Le operators to filter for a < b < c, instead of pre-orienting edges low -> high.
+    println!("========== OPERATOR-FILTERED TRIANGLE BENCHMARKS ==========");
+    for &name in &datasets {
+        snap_triangles_symmetric(name, None);
+    }
+
     // These mostly, but not always, generate many more results. NB. each directed
     // triangle is counted 3x (for its 3 rotations), except for self-triangles (x->x->x).
     println!("========== DIRECTED TRIANGLE BENCHMARKS ==========");
@@ -43,6 +58,65 @@ fn main() {
     for &name in &["wiki-Vote.txt"] {
         snap_triangles_directed(name, None);
     }
+}
+
+// ---- canonical (a < b < c) triangles via operators, not pre-orientation. ----
+//
+// Symmetrize the graph (both directions, no self-loops), then find triangles E(a,b)
+// E(b,c) E(a,c) with a <= b <= c enforced by two Le operators. Without self-loops a <= b
+// <= c is really a < b < c, so each undirected triangle is found exactly once: the
+// canonical SNAP count, matching snap_triangles_undirected but filtering with operators
+// rather than baking the orientation into the edge set. (Expect it to be slower: the edge
+// set is 2x larger and the operator prunes later than pre-orientation does --
+// pre-orientation prunes *before* the pick-an-atom-to-propose step.)
+pub fn snap_triangles_symmetric(dataset: &str, max_edges: Option<usize>) {
+    let raw = snap_load(dataset, max_edges);
+    let edges = symmetrize(&raw);
+    let db = edge_db(&edges);
+
+    let q: Query<char, &'static str> = Query {
+        vars: vec!['a', 'b', 'c'],
+        atoms: vec![atom("E", &['a', 'b']),
+                    atom("E", &['b', 'c']),
+                    atom("E", &['a', 'c'])],
+        operators: vec![op_atom(Le, &['a', 'b']),   // a <= b
+                        op_atom(Le, &['b', 'c'])],  // b <= c
+    };
+
+    // 1: Plan and build the trie indexes.
+    let wcoj_start = Instant::now();
+    let plan = q.plan(&['a', 'b', 'c']);
+    let indexes = plan.build_indexes(&db);
+    let build_time = wcoj_start.elapsed();
+
+    // 2: Execute the join.
+    let t = Instant::now();
+    let exec = plan.bind(&indexes).expect("triangle query is non-empty");
+    let got = run_plan(&exec);
+    let exec_time = t.elapsed();
+    let total_time = wcoj_start.elapsed();
+
+    // 3: Canonical undirected triangles via the pre-oriented binary join, as ground truth.
+    let t = Instant::now();
+    let want = binary_triangles_undirected(&to_low_high(&raw));
+    let binary_time = t.elapsed();
+
+    println!(
+        "{dataset}: {} symmetrized edges -> {} triangles
+  wcoj build    {:>9.2?}
+  wcoj execute  {:>9.2?}
+  wcoj total    {:>9.2?}    found {:8} triangles
+  2-edge-filter {:>9.2?}    found {:8} triangles
+",
+        edges.len(), got.len(),
+        build_time,
+        exec_time,
+        total_time, got.len(),
+        binary_time, want.len(),
+    );
+
+    assert_eq!(got.len(), want.len(), "canonical triangle count mismatch");
+    assert!(got == want, "canonical triangle set mismatch");
 }
 
 // Run a plan depth-first, collect results, and sort. Like ExecutableQuery::collect_dfs but with a
