@@ -391,14 +391,11 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
     Rel: Eq + Hash + Clone,
     Op: Operator + Clone,
 {
-    // TODO: review & cleanup this largely LLM-generated function.
     pub fn plan(&self, order: &[Var]) -> QueryPlan<Rel, Op> {
         // TODO: check that order is a permutation of the query variables.
 
         // Given a var order, we go through every atom & operator in the query and assign
-        // it to the levels it ought to be in. For relational atoms, these are the levels
-        // corresponding to its variables; for an operator, only the last level that
-        // touches its variables.
+        // it to the levels it ought to be in.
         let mut levels: Vec<Level<Op>> = (0..order.len())
             .map(|_| Level { atoms: Vec::new(), proposer: None, filters: Vec::new() })
             .collect();
@@ -412,8 +409,7 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
         let mut atoms: Vec<(Rel, IndexShape)> = Vec::with_capacity(self.atoms.len());
         for (atom_idx, atom) in self.atoms.iter().enumerate() {
             let shape = index_shape(&order_pos, &atom.vars);
-            // This atom binds each of its variables' order positions. A variable's first
-            // occurrence is its TrieLevel column, so this visits each variable once.
+            // Each variable gets one TrieLevel column, so this hits each var once.
             for (col, v) in atom.vars.iter().enumerate() {
                 if matches!(shape[col], IndexColumnShape::TrieLevel(_)) {
                     levels[order_pos[v]].atoms.push(atom_idx);
@@ -428,27 +424,26 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
         // otherwise, a filter.
         for atom in &self.operators {
             let op = &atom.pred;
-            let n_in = op.input_arity();
-            assert_eq!(atom.vars.len(), n_in + op.has_output() as usize,
-                "operator vars don't match its arity (inputs first, then the output if any)");
+            assert_eq!(atom.vars.len(), op.arity(), "operator vars don't match its arity");
             assert!(!atom.vars.is_empty(), "zero-variable operators are not supported");
-
-            // Order positions of the operator's variables (inputs first, then output).
-            let positions: Vec<usize> = atom.vars.iter().map(|v| {
-                *order_pos.get(v).expect("every operator variable must appear in the variable order")
-            }).collect();
-            let last_pos = *positions.iter().max().unwrap();
-
-            let output_pos: Option<usize> = op.has_output().then(|| positions[n_in]);
-
-            // Propose if the output is this level's variable (the last one to be bound) and
-            // the proposer slot is still free; otherwise this operator is a filter.
+            // Convert Vars into indexes into variable order.
+            let atom = Atom {
+                pred: op.clone(),
+                vars: atom.vars.iter().map(|v| {
+                    *order_pos.get(v)
+                        .expect("every operator variable must appear in the variable order")
+                }).collect()
+            };
+            // Assign to level of last variable in var order.
+            let last_pos = *atom.vars.iter().max().unwrap();
             let level = &mut levels[last_pos];
-            let step = Atom { pred: op.clone(), vars: positions };
-            if output_pos == Some(last_pos) && level.proposer.is_none() {
-                level.proposer = Some(step);
+            // Propose if the output is this level's variable and no proposer yet exists.
+            if op.has_output()
+                && last_pos == atom.vars[op.input_arity()]
+                && level.proposer.is_none() {
+                level.proposer = Some(atom);
             } else {
-                level.filters.push(step);
+                level.filters.push(atom);
             }
         }
 
