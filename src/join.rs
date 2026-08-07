@@ -64,7 +64,7 @@ use crate::hash::Map;
 //
 // I'm assuming we intern everything up front. This makes things simpler than figuring out
 // where to put tags to minimize tag-checking overhead.
-pub type Value = usize;
+pub type Value = usize;         // needs to be Copy + Hash + Eq
 
 // A database is something which has relations and can tabulate them.
 //
@@ -91,12 +91,15 @@ pub struct Query<Var, Rel, Op = Rc<dyn Operator>> {
     pub operators: Vec<Atom<Op, Var>>,   // computational atoms (operators)
     // We separate relational atoms from operators because the planner & execution
     // engine treat them differently. It's possible we could unify them with a redesign of
-    // what query plans look like, but it doesn't seem obvious how.
+    // what query plans look like, but it doesn't seem obvious how. Differences:
     //
     // Atoms get tries built for them; operators don't.
     //
     // Atoms get consulted on every variable they touch; operators, for now, only on the
     // last one (see "Limitations of this trait for operators" below).
+    //
+    // Once we have incremental evaluation, relations will have derivatives/delta versions, but
+    // operators don't change so they won't.
     //
     // Because we separate atoms from operators, we only pay dispatch overhead for
     // operators; queries without operators don't pay.
@@ -146,6 +149,7 @@ pub trait Operator {
     fn input_arity(&self) -> usize;
     fn has_output(&self) -> bool; // at most one output, for now.
     fn arity(&self) -> usize { self.input_arity() + (self.has_output() as usize) }
+    // TODO: more comment here explaining how check() vs compute() work.
     // Precondition: args.len() == self.arity().
     fn check(&self, args: &[Value]) -> bool;
     // Precondition: self.has_output() && inputs.len() == self.input_arity().
@@ -451,10 +455,16 @@ impl Trie {
 // In principle we can do more interesting re-use, for instance, R(x,y) and R(2,x) and
 // R(x,x) can use the same index. It is more obvious how to do this using the "alternative
 // approach" of desugaring constants and variable re-use into separate atoms.
+//
+// TODO: explain that this will only share more indexes with the right variable order, and that
+// the more restrictive trie indexes can actually be more efficient (at the cost of more
+// indexing).
 
 
 // ---------- QUERY PLANNING ----------
 pub struct QueryPlan<Rel, Op> {
+    // TODO: could add a `var_order: Vec<Var>` here to be more self-describing?
+    //
     // Replaces query atoms by the shape of the index we need for them.
     pub atoms: Vec<(Rel, IndexShape)>,
     // One level per variable, in variable order. levels[i] describes what to do when we
@@ -481,7 +491,7 @@ pub struct Level<Op> {          // TODO: rename to VarPlan?
     pub atoms: Vec<usize>,
 }
 
-// For example, Query { vars: [x,y,z], atoms: [R(x,y), R(y,z)] }.plan() yields:
+// For example, Query { vars: [x,y,z], atoms: [R(x,y), R(y,z)] }.plan([x,y,z]) yields:
 // QueryPlan {
 //     atoms: [(R, [TrieLevel(0), TrieLevel(1)]),
 //             (R, [TrieLevel(0), TrieLevel(1)])],
@@ -520,6 +530,7 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
             .map(|_| Level { atoms: Vec::new(), proposer: None, filters: Vec::new() })
             .collect();
 
+        // For each atom, put it in the appropriate levels.
         for (a, atom) in self.atoms.iter().enumerate() {
             // first_col[v] = the first column of this atom where variable v appears
             // (or_insert keeps the earliest column). `distinct` is its key set; its order
@@ -557,8 +568,10 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
             atoms.push((atom.pred.clone(), shape));
         }
 
-        // Each operator is consulted at the level of its *last* variable in `order` (the one
-        // with the greatest order position): by then every other var it touches is bound.
+        // For each operator, put it in the level of its last variable in the var order;
+        // by then every other var it touches is bound. If this variable is the operator's
+        // output, then make it the proposer for the level if there isn't one already;
+        // otherwise, a filter.
         for atom in &self.operators {
             let op = &atom.pred;
             let n_in = op.input_arity();
