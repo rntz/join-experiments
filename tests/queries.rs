@@ -32,7 +32,7 @@ fn level_atoms<R, Op>(plan: &QueryPlan<R, Op>) -> Vec<Vec<usize>> {
 
 // ---- planning the directed triangle: two shared indexes, the documented plan. ----
 #[test]
-fn test_plan_triangle() {
+fn test_triangle() {
     let edges: Vec<(Value, Value)> = vec![
         (0, 1), (1, 2), (2, 0), (0, 2), (2, 1), (1, 0), (1, 3), (3, 1),
     ];
@@ -62,7 +62,7 @@ fn test_plan_triangle() {
 
 // ---- planning a 2-path E(x,y) E(y,z): a single index shared by both atoms. ----
 #[test]
-fn test_plan_path() {
+fn test_path() {
     let edges: Vec<(Value, Value)> = vec![(0, 1), (1, 2), (1, 3), (2, 3), (3, 0)];
     let db = edge_db(&edges);
     let q: Query<char, &'static str> = Query {
@@ -94,7 +94,7 @@ fn test_plan_path() {
 
 // ---- planning a self-join R(x,x): the repeated variable becomes an EqColumn. ----
 #[test]
-fn test_plan_self_loop() {
+fn test_self_loop() {
     let db = VecDb::new().rel(
         "R", 2, vec![vec![0, 0], vec![1, 1], vec![2, 3], vec![4, 4], vec![5, 6]],
     );
@@ -118,7 +118,7 @@ fn test_plan_self_loop() {
 // R(x,x) over a relation with no diagonal rows filters to empty, so the conjunction has no
 // results and bind short-circuits.
 #[test]
-fn test_plan_empty_index() {
+fn test_empty_index() {
     let db = VecDb::new().rel("S", 2, vec![vec![0, 1], vec![1, 0]]); // no (a,a) rows
     let q: Query<char, &'static str> = Query {
         vars: vec!['x'],
@@ -133,7 +133,7 @@ fn test_plan_empty_index() {
 
 // ---- planning the undirected triangle E(x,y) E(y,z) E(x,z): all three atoms one index. ----
 #[test]
-fn test_plan_undirected_triangle() {
+fn test_undirected_triangle() {
     let raw: Vec<(Value, Value)> = vec![
         (1, 0), (1, 2), (2, 0), (0, 3), (3, 4), (4, 0), (2, 2), (0, 1),
     ];
