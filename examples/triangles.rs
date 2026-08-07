@@ -13,7 +13,7 @@ use rntz_joins::{
 
 // An atom over relation `rel` with the given variables.
 fn atom(rel: &'static str, vars: &[char]) -> Atom<&'static str, char> {
-    Atom { relation: rel, vars: vars.to_vec() }
+    Atom { pred: rel, vars: vars.to_vec() }
 }
 
 fn main() {

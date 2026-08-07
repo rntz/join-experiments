@@ -20,7 +20,7 @@ pub mod join_bfs;
 pub mod vec_db;
 
 pub use join::{
-    Atom, Database, ExecutableQuery, IndexColumnShape, Indexes, Level, OpCall, Operator,
+    Atom, Database, ExecutableQuery, IndexColumnShape, Indexes, Level, Operator,
     QueryPlan, Query, Trie, Value,
 };
 pub use vec_db::VecDb;

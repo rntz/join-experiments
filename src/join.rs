@@ -88,8 +88,8 @@ pub trait Database {
 pub struct Query<Var, Rel, Op = Rc<dyn Operator>> {
     pub vars: Vec<Var>,
     pub atoms: Vec<Atom<Rel, Var>>,      // relational atoms
-    pub operators: Vec<OpCall<Op, Var>>, // computational operators
-    // We separate relational Atoms from Operators here because the planner & execution
+    pub operators: Vec<Atom<Op, Var>>,   // computational atoms (operators)
+    // We separate relational atoms from operators because the planner & execution
     // engine treat them differently. It's possible we could unify them with a redesign of
     // what query plans look like, but it doesn't seem obvious how.
     //
@@ -102,19 +102,18 @@ pub struct Query<Var, Rel, Op = Rc<dyn Operator>> {
     // operators; queries without operators don't pay.
 }
 
-pub struct Atom<Rel, Var> {
-    pub relation: Rel,
-    pub vars: Vec<Var>,         // Invariant: vars.len() == db.arity(relation)
-    // TODO: how do we represent constants in atoms?
-}
-
+// An atom applies its predicate `pred` to `vars`. A relational atom (Atom<Rel, Var>) matches
+// rows of a database relation; a computational atom (Atom<Op, Var>) applies an Operator.
+//
+// Invariant for relational atoms: vars.len() == db.arity(pred).
+//
+// Invariant for computational atoms: vars.len() == pred.arity(). The first pred.input_arity()
+// vars are inputs; if pred.has_output(), the last var is the output.
 #[derive(Clone)]
-pub struct OpCall<Op, Var> {
-    pub op: Op,
+pub struct Atom<Pred, Var> {
+    pub pred: Pred,
     pub vars: Vec<Var>,
-    // Invariant: vars.len() == op.arity(). The first op.input_arity() vars are inputs. If
-    // op.has_output(), the last var is the output. In a Query the `vars` are query Vars;
-    // in a QueryPlan they are indexes into the variable order (OpCall<Op, usize>).
+    // TODO: how do we represent constants in atoms?
 }
 
 impl<Var: Eq+Hash+Copy, Rel: Eq+Hash+Clone, Op: Operator> Query<Var, Rel, Op> {
@@ -182,14 +181,14 @@ impl<Ptr> Operator for Ptr where
     }
 }
 
-// Limitations of our operator / OpCall representation:
+// Limitations of our operator / computational-atom representation:
 //
 // 0. Fixed input/output. Eg. if OpEq is an Operator for equality, then (x = y) can become:
 //
-//      OpCall { op: OpEq, vars: [x,y] }        which makes x input and y output
-//      OpCall { op: OpEq, vars: [y,x] }        which makes y input and x output
+//      Atom { pred: OpEq, vars: [x,y] }        which makes x input and y output
+//      Atom { pred: OpEq, vars: [y,x] }        which makes y input and x output
 //
-//    But we can't have one OpCall that represents both and leaves it up to the planner to
+//    But we can't have one atom that represents both and leaves it up to the planner to
 //    decide which way information flows.
 //
 // 1. An operator must have 0 or 1 output variables.
@@ -238,7 +237,7 @@ impl<Ptr> Operator for Ptr where
 // ask for all y ++ z = x, all "splittings" of it. And given x,y we can ask: is y a prefix
 // of x, and if so, what's the suffix?
 //
-// With our current approach the input/output mode is hard-coded into the OpCall and thus
+// With our current approach the input/output mode is hard-coded into the atom and thus
 // the query. This is probably okay for many queries, but it means the variable order
 // picker has less room to choose how to order computation.
 
@@ -464,6 +463,9 @@ pub struct QueryPlan<Rel, Op> {
 }
 
 // Everything the executor needs to do at a single variable's level.
+//
+// We use Atom<Op, usize> to represent operator calls (proposer/filters); for such an atom, its
+// atom.vars are indexes into the variable order.
 #[derive(Clone)]
 pub struct Level<Op> {          // TODO: rename to VarPlan?
     // An operator to propose a unique value for this variable, computed from its inputs
@@ -471,10 +473,10 @@ pub struct Level<Op> {          // TODO: rename to VarPlan?
     // fewest children.
     //
     // Once we have FDs and may know statically that a relation will propose exactly one
-    // value, this can become `enum Proposer { Atom(usize), Op(OpCall<Op, usize>) }`.
-    pub proposer: Option<OpCall<Op, usize>>,
+    // value, this can become `enum Proposer { Atom(usize), Op(Atom<Op, usize>) }`.
+    pub proposer: Option<Atom<Op, usize>>,
     // Operators that filter bindings.
-    pub filters: Vec<OpCall<Op, usize>>,
+    pub filters: Vec<Atom<Op, usize>>,
     // The indexes in QueryPlan.atoms of the atoms constraining this variable.
     pub atoms: Vec<usize>,
 }
@@ -491,7 +493,7 @@ pub struct Level<Op> {          // TODO: rename to VarPlan?
 // An operator, say `w = x + z` (inputs x,z; output w) with order [x,y,z,w], adds a fourth
 // level with no trie atoms:
 //
-//              Level { atoms: [], proposer: Some(OpCall { vars: [0,2,3] }), filters: [] }
+//              Level { atoms: [], proposer: Some(Atom { vars: [0,2,3] }), filters: [] }
 //
 // TODO: some unit tests for Query::plan.
 // Try this, and the same with var order [y,x,z].
@@ -552,20 +554,20 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
 
             // This atom binds each of its distinct variables' order positions.
             for &v in &distinct { levels[order_pos[&v]].atoms.push(a); }
-            atoms.push((atom.relation.clone(), shape));
+            atoms.push((atom.pred.clone(), shape));
         }
 
         // Each operator is consulted at the level of its *last* variable in `order` (the one
         // with the greatest order position): by then every other var it touches is bound.
-        for opcall in &self.operators {
-            let op = &opcall.op;
+        for atom in &self.operators {
+            let op = &atom.pred;
             let n_in = op.input_arity();
-            assert_eq!(opcall.vars.len(), n_in + op.has_output() as usize,
+            assert_eq!(atom.vars.len(), n_in + op.has_output() as usize,
                 "operator vars don't match its arity (inputs first, then the output if any)");
-            assert!(!opcall.vars.is_empty(), "zero-variable operators are not supported");
+            assert!(!atom.vars.is_empty(), "zero-variable operators are not supported");
 
             // Order positions of the operator's variables (inputs first, then output).
-            let positions: Vec<usize> = opcall.vars.iter().map(|v| {
+            let positions: Vec<usize> = atom.vars.iter().map(|v| {
                 *order_pos.get(v).expect("every operator variable must appear in the variable order")
             }).collect();
             let last_pos = *positions.iter().max().unwrap();
@@ -575,7 +577,7 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
             // Propose if the output is this level's variable (the last one to be bound) and
             // the proposer slot is still free; otherwise this operator is a filter.
             let level = &mut levels[last_pos];
-            let step = OpCall { op: op.clone(), vars: positions };
+            let step = Atom { pred: op.clone(), vars: positions };
             if output_pos == Some(last_pos) && level.proposer.is_none() {
                 level.proposer = Some(step);
             } else {
@@ -724,10 +726,10 @@ impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
     }
 
     // Run this level's filter operators.
-    fn filters_pass(&mut self, filters: &[OpCall<Op, usize>]) -> bool {
+    fn filters_pass(&mut self, filters: &[Atom<Op, usize>]) -> bool {
         for f in filters {
             self.gather(&f.vars);
-            if !f.op.check(&self.input_buf) { return false; }
+            if !f.pred.check(&self.input_buf) { return false; }
         }
         true
     }
@@ -754,7 +756,7 @@ impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
                 // The proposer's output is this level's variable; compute it from the inputs.
                 debug_assert_eq!(prop.vars.last(), Some(&level_idx));
                 self.gather(&prop.vars[..prop.vars.len() - 1]);
-                let key = match prop.op.compute(&self.input_buf) {
+                let key = match prop.pred.compute(&self.input_buf) {
                     Some(v) => v,
                     None => { self.restore(level, mark); return; } // proposal failed.
                 };
