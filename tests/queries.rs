@@ -3,15 +3,25 @@
 // End-to-end query tests: build a Query, plan() it, materialize its trie indexes, bind()
 // into an ExecutableQuery, and check execute_dfs/bfs against a binary-join equivalent. We
 // use `char` variables (x, y, z) and &str relation names.
+use std::rc::Rc;
+
 use rntz_joins::IndexColumnShape::{EqColumn, TrieLevel};
 use rntz_joins::{
     binary_triangles_directed, binary_triangles_undirected, edge_db, to_low_high, Atom,
-    Query, QueryPlan, Value, VecDb,
+    Operator, Query, QueryPlan, Value, VecDb,
 };
+use rntz_joins::op;
 
 // An atom over relation `rel` with the given variables. Sugar to keep the queries terse.
 fn atom(rel: &'static str, vars: &[char]) -> Atom<&'static str, char> {
     Atom { pred: rel, vars: vars.to_vec() }
+}
+
+// A computational atom applying operator `o` to the given variables (inputs first, then the
+// output if any). The operator is boxed into the default Rc<dyn Operator> query representation.
+fn op_atom(o: impl Operator + 'static, vars: &[char]) -> Atom<Rc<dyn Operator>, char> {
+    let pred: Rc<dyn Operator> = Rc::new(o);
+    Atom { pred, vars: vars.to_vec() }
 }
 
 // The `atoms` list of each plan level, in order. These operator-free plan tests check the
@@ -205,4 +215,63 @@ fn test_bfs_matches_dfs() {
     // Empty query (no variables): both should yield exactly one empty tuple.
     let empty: Query<char, &'static str> = Query { vars: vec![], atoms: vec![], operators: vec![] };
     check_bfs_matches_dfs(&empty, &[], &VecDb::new());
+}
+
+// ---- operators: a compute-operator (Add) proposing a fresh variable. ----
+//
+// E(a,b) with s = a + b, order [a,b,s]. `s` appears in no atom, so the Add operator is its
+// sole proposer: at level s it computes a+b and emits it (no trie to intersect against).
+#[test]
+fn test_op_addition_proposes() {
+    let edges: Vec<(Value, Value)> = vec![(1, 2), (3, 4)];
+    let db = edge_db(&edges);
+    let q: Query<char, &'static str> = Query {
+        vars: vec!['a', 'b', 's'],
+        atoms: vec![atom("E", &['a', 'b'])],
+        operators: vec![op_atom(op::Add, &['a', 'b', 's'])], // s = a + b
+    };
+    let plan = q.plan(&['a', 'b', 's']);
+    let indexes = plan.build_indexes(&db);
+    let exec = plan.bind(&indexes).expect("query is non-empty");
+    assert_eq!(exec.collect_dfs(), vec![vec![1, 2, 3], vec![3, 4, 7]]);
+}
+
+// ---- operators: a check-operator (Le) filtering bindings. ----
+//
+// E(a,b) with a ≤ b, order [a,b]. Le has no output, so it's a filter consulted at level b
+// (its last variable); rows with a > b are dropped.
+#[test]
+fn test_op_leq_filters() {
+    let edges: Vec<(Value, Value)> = vec![(1, 2), (2, 1), (3, 3)];
+    let db = edge_db(&edges);
+    let q: Query<char, &'static str> = Query {
+        vars: vec!['a', 'b'],
+        atoms: vec![atom("E", &['a', 'b'])],
+        operators: vec![op_atom(op::Le, &['a', 'b'])], // a ≤ b
+    };
+    let plan = q.plan(&['a', 'b']);
+    let indexes = plan.build_indexes(&db);
+    let exec = plan.bind(&indexes).expect("query is non-empty");
+    assert_eq!(exec.collect_dfs(), vec![vec![1, 2], vec![3, 3]]);
+}
+
+// ---- operators: a compute-operator used as a check when its output isn't proposed. ----
+//
+// T(a,b,c) with a = b + c, order [a,b,c]. The Add's output `a` is bound by the atom (and
+// comes before its inputs in the order), so Add can't propose it; instead it's a filter,
+// checked via Operator::check at level c once a,b,c are all bound. Keeps rows where a = b+c.
+#[test]
+fn test_op_addition_checks() {
+    let db = VecDb::new().rel(
+        "T", 3, vec![vec![3, 1, 2], vec![4, 1, 2], vec![4, 2, 2], vec![1, 0, 0]],
+    );
+    let q: Query<char, &'static str> = Query {
+        vars: vec!['a', 'b', 'c'],
+        atoms: vec![atom("T", &['a', 'b', 'c'])],
+        operators: vec![op_atom(op::Add, &['b', 'c', 'a'])], // a = b + c
+    };
+    let plan = q.plan(&['a', 'b', 'c']);
+    let indexes = plan.build_indexes(&db);
+    let exec = plan.bind(&indexes).expect("query is non-empty");
+    assert_eq!(exec.collect_dfs(), vec![vec![3, 1, 2], vec![4, 2, 2]]);
 }

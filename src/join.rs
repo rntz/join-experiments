@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::Value;
 use crate::hash::Map;
-use crate::ops::Operator;
+use crate::op::Operator;
 
 // ---------- NEXT THINGS TO IMPLEMENT ----------
 //

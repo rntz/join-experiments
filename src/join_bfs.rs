@@ -3,7 +3,7 @@
 // tweaking to incorporate the insights from DataToad; see "MICHAEL NOTES" below.
 use crate::Value;
 use crate::join::{ExecutableQuery, TrieMap, Trie};
-use crate::ops::Operator;
+use crate::op::Operator;
 
 impl<'a, Op: Operator> ExecutableQuery<'a, Op> {
     // ======================================================================

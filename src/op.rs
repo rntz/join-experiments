@@ -18,19 +18,19 @@ use crate::Value;
 //
 // RANGE        i ∈ range(n,m)  n,m         i           no
 //
-// ADDITION     x = y + z       y,z         x           yes; ∀y,z ∃!x  x = y + z
+// ADDITION     x + y = z       x,y         z           yes; ∀x,y ∃!z  x + y = z
 //                              x,z         y           yes; at most one y for fixed (x,z)
-//                              x,y         z           yes; at most one z for fixed (x,y)
+//                              y,z         x           yes; at most one x for fixed (y,z)
 //
-// STRING       x = y ++ z      y,z         x           yes; ∀y,z ∃!x
-// APPEND                       x           y,z         no; many y, z yield same x = y ++ z
-//                              x,y         z           yes; ∀x,y ∃ at most one z (maybe none)
+// STRING       x ++ y = z      x,y         z           yes; ∀x,y ∃!z
+// APPEND                       z           x,y         no; many x,y yield same z
 //                              x,z         y           yes; ∀x,z ∃ at most one y (maybe none)
+//                              y,z         x           yes; ∀y,z ∃ at most one x (maybe none)
 //
 // Addition & string append are good examples of operators with multiple possible
 // input-output modes ("modes" is the semi-standard term for this in logic programming).
-// Given strings y,z we can compute x = y ++ z. But given x, we can ask for all y ++ z =
-// x, all splittings of it. And given x,y we can ask: is y a prefix of x, and if so,
+// Given strings x,y we can compute z = x ++ y. But given z, we can ask for all x ++ y =
+// z, all splittings of it. And given y,x we can ask: is x a prefix of z, and if so,
 // what's the suffix?
 
 // ===== WHAT WE ACTUALLY IMPLEMENT =====
@@ -97,24 +97,8 @@ pub trait Operator {
 // easy to use any Operator without a big enum/match, but requires dynamic dispatch
 // through function pointers at runtime, which may be slower (esp. on WebAssembly).
 //
-// TODO: provide some examples that show how to do each of these.
-
-#[allow(dead_code)]
-#[derive(Clone)]
-enum Empty {}                   // useful representation if your query has no operators.
-impl Operator for Empty {
-    #[inline] fn input_arity(&self) -> usize { match *self {} }
-    #[inline] fn has_output(&self) -> bool { match *self {} }
-    #[inline] fn check(&self, _: &[Value]) -> bool { match *self {} }
-    #[inline] fn compute(&self, _: &[Value]) -> Option<Value> { match *self {} }
-}
-
-// This impl lets us use Rc<dyn Operator> (the default) or Box<dyn Operator> as our Operator
-// representation in Queries. The plan clones operator handles (see C3 / QueryPlan), so the
-// default is Rc, which is cheap to clone.
-impl<Ptr> Operator for Ptr where
-    Ptr: std::ops::Deref<Target = dyn Operator>,
-{
+// We use Rc instead of Box because Query::plan clones operators; Rc is cheap to clone.
+impl<Ptr: std::ops::Deref<Target = dyn Operator>> Operator for Ptr {
     fn input_arity(&self) -> usize { (**self).input_arity() }
     fn has_output(&self) -> bool { (**self).has_output() }
     fn arity(&self) -> usize { (**self).arity() }
@@ -128,6 +112,16 @@ impl<Ptr> Operator for Ptr where
     }
 }
 
+// If your query has no operators, you could also use Empty.
+#[allow(dead_code)]
+#[derive(Clone)]
+enum Empty {}                   // useful representation if your query has no operators.
+impl Operator for Empty {
+    #[inline] fn input_arity(&self) -> usize { match *self {} }
+    #[inline] fn has_output(&self) -> bool { match *self {} }
+    #[inline] fn check(&self, _: &[Value]) -> bool { match *self {} }
+    #[inline] fn compute(&self, _: &[Value]) -> Option<Value> { match *self {} }
+}
 
 // ==== ON IMPLEMENTING OPERATORS EFFICIENTLY ====
 //
@@ -171,3 +165,35 @@ impl<Ptr> Operator for Ptr where
 // "Function" does NOT mean computational function here: it means functional dependency.)
 
 
+// ---------- OPERATOR IMPLEMENTATIONS ----------
+
+// Addition x + y = z. Inputs x, y; output z. Panics on overflow; this might slow it down.
+#[derive(Clone, Copy, Debug)]
+pub struct Add;
+impl Operator for Add {
+    fn input_arity(&self) -> usize { 2 }
+    fn has_output(&self) -> bool { true }
+    fn check(&self, args: &[Value]) -> bool {
+        let &[x, y, z] = args else { panic!("Add::check wants 3 args") };
+        x.checked_add(y).expect("addition overflow") == z
+    }
+    fn compute(&self, inputs: &[Value]) -> Option<Value> {
+        let &[x, y] = inputs else { panic!("Add::compute wants 2 inputs") };
+        Some(x.checked_add(y).expect("addition overflow"))
+    }
+}
+
+// Inequality x ≤ y. Inputs x, y; no output, so it only ever checks.
+#[derive(Clone, Copy, Debug)]
+pub struct Le;
+impl Operator for Le {
+    fn input_arity(&self) -> usize { 2 }
+    fn has_output(&self) -> bool { false }
+    fn check(&self, args: &[Value]) -> bool {
+        let &[x, y] = args else { panic!("Le::check wants 2 args") };
+        x <= y
+    }
+    fn compute(&self, _: &[Value]) -> Option<Value> {
+        panic!("Le has no output; do not call compute()")
+    }
+}
