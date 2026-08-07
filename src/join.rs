@@ -116,7 +116,7 @@ pub struct Atom<Pred, Var> {
     // TODO: how do we represent constants in atoms?
 }
 
-impl<Var: Eq+Hash+Copy, Rel: Eq+Hash+Clone, Op: Operator> Query<Var, Rel, Op> {
+impl<Var: Eq+Hash+Clone, Rel: Eq+Hash+Clone, Op: Operator> Query<Var, Rel, Op> {
     #[allow(unreachable_code, dead_code, unused)]
     fn self_check<Db: Database<Rel = Rel>>(&self, db: &Db) {
         todo!("check: self.vars is distinct; no duplicates");
@@ -199,25 +199,20 @@ pub enum IndexColumnShape {
 
 // The index shape for an atom whose columns are `atom_vars`, given the variable order
 // positions `order_pos`.
-//
-// TODO: review this LLM-generated function
 fn index_shape<Var>(order_pos: &HashMap<Var, usize>, atom_vars: &[Var]) -> IndexShape
 where Var : Eq + Hash + Clone
 {
     use IndexColumnShape::{EqColumn, TrieLevel};
 
-    // first_col[v] = the first column where variable v appears (or_insert keeps the
-    // earliest column).
+    // first_col[v] = the first column where variable v appears.
     let mut first_col: HashMap<Var, usize> = HashMap::default();
     for (col, v) in atom_vars.iter().enumerate() {
         first_col.entry(v.clone()).or_insert(col);
     }
 
-    // Assign each distinct variable a trie level: its rank among this atom's variables
-    // when sorted by global order position. This is what keeps the atom's trie aligned
-    // with the global binding order.
+    // Sort atom's variables according to the variable order.
     let mut by_order: Vec<&Var> = first_col.keys().collect();
-    by_order.sort_by_key(|v| {
+    by_order.sort_unstable_by_key(|v| {
         *order_pos.get(v).expect("every atom variable must appear in the variable order")
     });
     let level_of: HashMap<Var, usize> =
@@ -387,7 +382,7 @@ pub struct Level<Op> {          // TODO: rename to VarPlan?
 // for the identity-order and repeated-variable cases.)
 
 impl<Var, Rel, Op> Query<Var, Rel, Op> where
-    Var: Eq + Hash + Copy,
+    Var: Eq + Hash + Clone,
     Rel: Eq + Hash + Clone,
     Op: Operator + Clone,
 {
@@ -402,7 +397,7 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
 
         // order_pos[v] = position of variable v in the variable order.
         let order_pos: HashMap<Var, usize> =
-            order.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+            order.iter().enumerate().map(|(i, v)| (v.clone(), i)).collect();
         assert_eq!(order_pos.len(), order.len(), "variable order repeats a variable");
 
         // For each atom, compute its IndexShape and put it in the appropriate levels.
