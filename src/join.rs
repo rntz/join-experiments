@@ -537,7 +537,6 @@ struct QueryDfsState<'a, Op, F> {
     // trie in that level; on leaving we restore them.
     saved: Vec<&'a TrieMap>,
     // Scratch buffers used to avoid repeated allocation:
-    children: Vec<&'a Trie>,    // trie children for descending to next level
     input_buf: Vec<Value>,      // values for input to an Operator
 }
 
@@ -555,7 +554,6 @@ impl<'a, Op: Operator> ExecutableQuery<'a, Op> {
             }).collect(),
             levels: &self.levels,
             prefix: Vec::with_capacity(self.levels.len()),
-            children: Vec::new(),
             saved: Vec::new(),
             input_buf: Vec::new(),
             callback: f,
@@ -571,7 +569,6 @@ impl<'a, Op: Operator> ExecutableQuery<'a, Op> {
     }
 }
 
-// ========== TODO: do a review/simplification pass over this LLM-modified code ==========
 impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
     // Copy the given prefix positions into `input_buf`, in order.
     fn gather(&mut self, positions: &[usize]) {
@@ -588,14 +585,24 @@ impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
         true
     }
 
+    fn set_trie(&mut self, trie_idx: usize, child: &'a Trie) {
+        // If it's a Leaf we don't need to load it, as it will never be read again.
+        if let Trie::Node(map) = child {
+            self.tries[trie_idx] = map;
+        }
+    }
+
     fn execute(&mut self, level_idx: usize) {
         if level_idx == self.levels.len() {
             (self.callback)(&self.prefix);
             return;
         }
         let level: &'a Level<Op> = &self.levels[level_idx];
-        // Snapshot the current node of each trie in this level onto the `saved` stack so we
-        // can restore them when we're done; `mark` is where this level's slice begins.
+        // Snapshot the current node of each trie in this level onto the `saved` stack so
+        // we can restore them when we're done; `mark` is where this level's slice begins.
+        // We can now mutate self.tries[i] for any i ∈ level.atoms and not worry that
+        // we'll screw things up for our callee. From this point on, at this level, we
+        // never read from `self.tries`, only write to it.
         let mark = self.saved.len();
         for &trie_idx in &level.atoms { self.saved.push(self.tries[trie_idx]); }
         let width = level.atoms.len();
@@ -607,73 +614,59 @@ impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
                 // The proposer's output is this level's variable; compute it from the inputs.
                 debug_assert_eq!(prop.vars.last(), Some(&level_idx));
                 self.gather(&prop.vars[..prop.vars.len() - 1]);
-                let key = match prop.pred.compute(&self.input_buf) {
-                    Some(v) => v,
-                    None => { self.restore(level, mark); return; } // proposal failed.
-                };
-                // Look up the proposed key in each level trie; a miss kills this branch.
-                self.children.clear();
-                for pos in 0..width {
-                    match self.saved[mark + pos].get(&key) {
-                        Some(child) => self.children.push(child),
-                        None => { self.restore(level, mark); return; }
-                    }
+                if let Some(key) = prop.pred.compute(&self.input_buf) {
+                    // proposer_pos is deliberately out of bounds so it doesn't compare
+                    // equal to any real position.
+                    let proposer_pos = level.atoms.len();
+                    self.propose(level, level_idx, mark, proposer_pos, &key);
                 }
-                self.descend(level, level_idx, key);
             }
-            // No operator proposer: the trie with the fewest children proposes, and we
-            // intersect the proposed key against the other level tries. We read each level
-            // trie's map off the `saved` stack (positions mark..mark+width).
+            // No designated proposer, so we choose dynamically: the trie with the fewest
+            // children proposes keys, and we look up each key in each other trie for this
+            // level. We find these tries in the `saved` stack (positions
+            // mark..mark+width).
             None => {
                 let proposer_pos: usize = (0..width)
                     .min_by_key(|&pos| self.saved[mark + pos].len())
                     .expect("no proposer at this level - the planner should have caught this");
                 let proposer_map = self.saved[mark + proposer_pos];
-                'keys: for (key, child) in proposer_map {
-                    self.children.clear();
-                    // Look up this key in each trie at this level. If any trie lacks this
-                    // key, skip to the next key.
-                    for pos in 0..width {
-                        if pos == proposer_pos { self.children.push(child); continue; }
-                        match self.saved[mark + pos].get(key) {
-                            Some(child) => self.children.push(child),
-                            None => continue 'keys,
-                        }
-                    }
-                    self.descend(level, level_idx, *key);
+                for (key, child) in proposer_map {
+                    self.set_trie(level.atoms[proposer_pos], child);
+                    self.propose(level, level_idx, mark, proposer_pos, key);
                 }
             }
         }
 
-        self.restore(level, mark);
-    }
-
-    // Commit `key` as this level's value: descend each level trie to its child under `key`,
-    // run the level's filters, and recurse if they all pass. Assumes `self.children` holds
-    // the child of each level atom (in `level.atoms` order).
-    fn descend(&mut self, level: &'a Level<Op>, level_idx: usize, key: Value) {
-        self.prefix.push(key);
-        for (pos, &trie_idx) in level.atoms.iter().enumerate() {
-            // A Leaf child bottoms out here and is never read again, so we skip it.
-            if let Trie::Node(map) = self.children[pos] { self.tries[trie_idx] = map; }
-        }
-        if self.filters_pass(&level.filters) {
-            self.execute(level_idx + 1);
-        }
-        let popped = self.prefix.pop();
-        debug_assert!(popped == Some(key));
-    }
-
-    // Restore every trie in this level to the parent node the caller left it at, then pop
-    // this level's slice off the `saved` stack.
-    fn restore(&mut self, level: &'a Level<Op>, mark: usize) {
         for (pos, &trie_idx) in level.atoms.iter().enumerate() {
             self.tries[trie_idx] = self.saved[mark + pos];
         }
         self.saved.truncate(mark);
     }
+
+    // Proposes a given key to all atoms/tries at this level, recursing if it's present in
+    // all & passes the level's filters.
+    fn propose(
+        &mut self,
+        level: &'a Level<Op>,
+        level_idx: usize,
+        mark: usize,
+        proposer_pos: usize, // proposer position, or level.atoms.len() if no proposer trie
+        key: &Value,
+    ) {
+        // Look up `key` in each trie & descend into it if found.
+        for pos in 0..level.atoms.len() {
+            if proposer_pos == pos { continue }
+            let Some(child) = self.saved[mark + pos].get(key) else { return };
+            self.set_trie(level.atoms[pos], child);
+        }
+        self.prefix.push(*key);
+        if self.filters_pass(&level.filters) {
+            self.execute(level_idx + 1);
+        }
+        let popped = self.prefix.pop();
+        debug_assert!(popped == Some(*key));
+    }
 }
-// ========== END code need review/simplifying ==========
 
 
 // ---------- UNIT TESTS (Claude-generated) ----------
