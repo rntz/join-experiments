@@ -589,14 +589,11 @@ impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
     }
 
     fn execute(&mut self, level_idx: usize) {
-        // Copy the `&'a` levels slice out so `level` borrows the plan, not `self`, and can be
-        // held across the `&mut self` calls below.
-        let levels = self.levels;
-        if level_idx == levels.len() {
+        if level_idx == self.levels.len() {
             (self.callback)(&self.prefix);
             return;
         }
-        let level: &'a Level<Op> = &levels[level_idx];
+        let level: &'a Level<Op> = &self.levels[level_idx];
         // Snapshot the current node of each trie in this level onto the `saved` stack so we
         // can restore them when we're done; `mark` is where this level's slice begins.
         let mark = self.saved.len();
