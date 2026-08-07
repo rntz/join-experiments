@@ -199,6 +199,40 @@ pub enum IndexColumnShape {
 // INVARIANT: If shape[i] = EqColumn(j), we should have j < i and shape[j] = TrieLevel(_).
 // This ensures that shapes which denote equivalent indexes are equal on the nose.
 
+// The index shape for an atom whose columns are `atom_vars`, given the variable order
+// positions `order_pos`.
+//
+// TODO: review this LLM-generated function
+fn index_shape<Var>(order_pos: &HashMap<Var, usize>, atom_vars: &[Var]) -> IndexShape
+where Var : Eq + Hash + Clone
+{
+    use IndexColumnShape::{EqColumn, TrieLevel};
+
+    // first_col[v] = the first column where variable v appears (or_insert keeps the
+    // earliest column).
+    let mut first_col: HashMap<Var, usize> = HashMap::default();
+    for (col, v) in atom_vars.iter().enumerate() {
+        first_col.entry(v.clone()).or_insert(col);
+    }
+
+    // Assign each distinct variable a trie level: its rank among this atom's variables
+    // when sorted by global order position. This is what keeps the atom's trie aligned
+    // with the global binding order.
+    let mut by_order: Vec<&Var> = first_col.keys().collect();
+    by_order.sort_by_key(|v| {
+        *order_pos.get(v).expect("every atom variable must appear in the variable order")
+    });
+    let level_of: HashMap<Var, usize> =
+        by_order.iter().enumerate().map(|(lvl, &v)| (v.clone(), lvl)).collect();
+
+    // Build the shape column by column: a variable's first occurrence becomes a TrieLevel;
+    // a repeat becomes an EqColumn back-reference to its first column. (A constant would
+    // become EqConst here, once Atom can carry constants.)
+    atom_vars.iter().enumerate().map(|(col, v)| {
+        if first_col[v] == col { TrieLevel(level_of[v]) } else { EqColumn(first_col[v]) }
+    }).collect()
+}
+
 impl Trie {
     // Trie::build() returns None if the trie is empty. This is necessary to distinguish
     // between Some(Trie::Leaf()), a trie containing an single empty tuple, and None, an
@@ -351,72 +385,42 @@ pub struct Level<Op> {          // TODO: rename to VarPlan?
 //
 //              Level { atoms: [], proposer: Some(Atom { vars: [0,2,3] }), filters: [] }
 //
-// TODO: some unit tests for Query::plan.
-// Try this, and the same with var order [y,x,z].
-// Try some with multiple uses of the same variable, or (once implemented) constants.
+// TODO: test Query::plan with a non-identity var order, eg [y,x,z]. (See tests/queries.rs
+// for the identity-order and repeated-variable cases.)
 
-// ========== TODO: review & cleanup this LLM code: ==========
 impl<Var, Rel, Op> Query<Var, Rel, Op> where
     Var: Eq + Hash + Copy,
     Rel: Eq + Hash + Clone,
     Op: Operator + Clone,
 {
+    // TODO: review & cleanup this largely LLM-generated function.
     pub fn plan(&self, order: &[Var]) -> QueryPlan<Rel, Op> {
+        // TODO: check that order is a permutation of the query variables.
+
         // Given a var order, we go through every atom & operator in the query and assign
         // it to the levels it ought to be in. For relational atoms, these are the levels
         // corresponding to its variables; for an operator, only the last level that
         // touches its variables.
-        use IndexColumnShape::{EqColumn, TrieLevel};
-
-        // TODO: check that order is a permutation of the query variables.
+        let mut levels: Vec<Level<Op>> = (0..order.len())
+            .map(|_| Level { atoms: Vec::new(), proposer: None, filters: Vec::new() })
+            .collect();
 
         // order_pos[v] = position of variable v in the variable order.
         let order_pos: HashMap<Var, usize> =
             order.iter().enumerate().map(|(i, &v)| (v, i)).collect();
         assert_eq!(order_pos.len(), order.len(), "variable order repeats a variable");
 
-        let mut atoms: Vec<(Rel, IndexShape)> = Vec::with_capacity(self.atoms.len());
-        let mut levels: Vec<Level<Op>> = (0..order.len())
-            .map(|_| Level { atoms: Vec::new(), proposer: None, filters: Vec::new() })
-            .collect();
-
         // For each atom, compute its IndexShape and put it in the appropriate levels.
-        //
-        // TODO: factor out computing the IndexShape into a helper!
+        let mut atoms: Vec<(Rel, IndexShape)> = Vec::with_capacity(self.atoms.len());
         for (atom_idx, atom) in self.atoms.iter().enumerate() {
-            // first_col[v] = the first column of this atom where variable v appears
-            // (or_insert keeps the earliest column). `atom_vars` is its key set; its order
-            // doesn't matter — we sort it for levels and otherwise treat it as a set.
-            let mut first_col: HashMap<Var, usize> = HashMap::default();
-            for (col, &v) in atom.vars.iter().enumerate() {
-                first_col.entry(v).or_insert(col);
-            }
-            let atom_vars: Vec<Var> = first_col.keys().copied().collect();
-
-            // Assign each atom_vars variable a trie level: its rank among this atom's
-            // variables when sorted by global order position. This is what keeps the atom's
-            // trie aligned with the global binding order.
-            let mut by_order = atom_vars.clone();
-            by_order.sort_by_key(|v| {
-                *order_pos.get(v).expect("every atom variable must appear in the variable order")
-            });
-            let level_of: HashMap<Var, usize> =
-                by_order.iter().enumerate().map(|(lvl, &v)| (v, lvl)).collect();
-
-            // Build the shape column by column: a variable's first occurrence becomes a
-            // TrieLevel; a repeat becomes an EqColumn back-reference to its first column.
-            // (A constant would become EqConst here, once Atom can carry constants.)
-            let mut shape: IndexShape = Vec::with_capacity(atom.vars.len());
-            for (col, &v) in atom.vars.iter().enumerate() {
-                if first_col[&v] == col {
-                    shape.push(TrieLevel(level_of[&v]));
-                } else {
-                    shape.push(EqColumn(first_col[&v]));
+            let shape = index_shape(&order_pos, &atom.vars);
+            // This atom binds each of its variables' order positions. A variable's first
+            // occurrence is its TrieLevel column, so this visits each variable once.
+            for (col, v) in atom.vars.iter().enumerate() {
+                if matches!(shape[col], IndexColumnShape::TrieLevel(_)) {
+                    levels[order_pos[v]].atoms.push(atom_idx);
                 }
             }
-
-            // This atom binds each of its variables' order positions.
-            for &v in &atom_vars { levels[order_pos[&v]].atoms.push(atom_idx); }
             atoms.push((atom.pred.clone(), shape));
         }
 
@@ -461,8 +465,6 @@ impl<Var, Rel, Op> Query<Var, Rel, Op> where
         QueryPlan { atoms, levels }
     }
 }
-
-// ========== END LLM CODE ==========
 
 // The built trie indexes, keyed by (relation, shape) so shared indexes are stored once.
 // A None value means the index is empty.
