@@ -14,8 +14,6 @@ use crate::op::Operator;
 //    - connectedness (pick keys that are constrained by previous ones)
 //    I think I built something like this in Racket once? go rummage around for it.
 //
-// 0. Computational atoms?
-//
 // 0. Representing & chasing FDs.
 
 // ---------- STEPS FOR EXECUTING A QUERY ----------
@@ -556,7 +554,6 @@ struct QueryDfsState<'a, Op, F> {
 impl<'a, Op: Operator> ExecutableQuery<'a, Op> {
     // Execute via depth-first backtracking.
     pub fn execute_dfs<F>(&self, f: F) where F: FnMut(&[Value]) {
-        // TODO: add a 0-level query test case.
         let empty = Map::default();
         QueryDfsState {
             tries: self.tries.iter().map(|&t| match t {
