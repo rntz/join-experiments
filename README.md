@@ -8,8 +8,11 @@ hash-based tries; a query plan intersects them one variable at a time, either de
 
 | File | Contents |
 |------|----------|
-| `src/lib.rs` | Crate root: module wiring, re-exports, simple utilities. |
+| `src/lib.rs` | Crate root: module wiring and re-exports. |
+| `src/value.rs` | The `Value` type (interned as `usize`) that everything joins over. |
 | `src/join.rs` | Core engine: databases, queries, tries, query plans, query execution. Many design comments. |
+| `src/join_bfs.rs` | Breadth-first query execution prototype. |
+| `src/op.rs` | Computational operators trait & implementations (eg. addition, ≤). |
 | `src/hash.rs` | `FxHasher` (fast non-cryptographic hash). Edit the `HashBuilder` definition in this file to switch from FxHash to Rust's default SipHash. |
 | `src/vec_db.rs` | Trivial vector-based `Database` used by tests & benchmarks. |
 | `src/graph.rs` | SNAP dataset loading and reference triangle finders using binary joins. |
