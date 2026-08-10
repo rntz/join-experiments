@@ -27,6 +27,8 @@ hash-based tries; a query plan intersects them one variable at a time, either de
 ## Usage
 
 ```sh
-cargo test                                  # run the test suite
-cargo run --release --example triangles     # run the benchmark (needs data/, use --release)
+cargo build --all-targets                   # does everything build?
+cargo test                                  # run test suite
+./download_snap_datasets.sh                 # download data needed for benchmarks into data/
+cargo run --release --example triangles     # run benchmarks
 ```
