@@ -5,23 +5,17 @@
 //
 // Use --release or it will be slow.
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rntz_joins::op::Le;
 use rntz_joins::{
     binary_triangles_directed, binary_triangles_undirected, edge_db, snap_load, symmetrize,
-    to_low_high, Atom, ExecutableQuery, Operator, Query, Value,
+    to_low_high, Atom, ExecutableQuery, Operator, Query, Value, VecDb,
 };
 
 // An atom over relation `rel` with the given variables.
 fn atom(rel: &'static str, vars: &[char]) -> Atom<&'static str, char> {
     Atom { pred: rel, vars: vars.to_vec() }
-}
-
-// A computational atom applying operator `o` to vars (inputs first, then output if any).
-fn op_atom(o: impl Operator + 'static, vars: &[char]) -> Atom<Rc<dyn Operator>, char> {
-    let pred: Rc<dyn Operator> = Rc::new(o);
-    Atom { pred, vars: vars.to_vec() }
 }
 
 fn main() {
@@ -69,32 +63,29 @@ fn main() {
 // rather than baking the orientation into the edge set. (Expect it to be slower: the edge
 // set is 2x larger and the operator prunes later than pre-orientation does --
 // pre-orientation prunes *before* the pick-an-atom-to-propose step.)
+//
+// We run the query under both operator representations to price dynamic dispatch. The
+// query only uses one operator, Le, so it can be its own representation (Op = Le): the
+// planner and executor monomorphize to it and the comparison should inline. The Rc<dyn
+// Operator> representation instead reaches every check through a vtable.
+//
+// The gap turns out to be under ~1% of execute time, in either direction run to run --
+// i.e. lost in the noise. It's much smaller than the penalty for running first on a cold
+// cache, so we run each representation twice, in a palindrome (dyn, static, static, dyn)
+// so each gets one early and one late slot, and keep its best time. Plausible reason
+// there's nothing to see: the vtable target never changes, so the indirect call predicts
+// perfectly, and either way the check is dwarfed by the trie's hash probes.
 pub fn snap_triangles_symmetric(dataset: &str, max_edges: Option<usize>) {
     let raw = snap_load(dataset, max_edges);
     let edges = symmetrize(&raw);
     let db = edge_db(&edges);
+    let rc_le = || Rc::new(Le) as Rc<dyn Operator>;
 
-    let q: Query<char, &'static str> = Query {
-        vars: vec!['a', 'b', 'c'],
-        atoms: vec![atom("E", &['a', 'b']),
-                    atom("E", &['b', 'c']),
-                    atom("E", &['a', 'c'])],
-        operators: vec![op_atom(Le, &['a', 'b']),   // a <= b
-                        op_atom(Le, &['b', 'c'])],  // b <= c
-    };
-
-    // 1: Plan and build the trie indexes.
-    let wcoj_start = Instant::now();
-    let plan = q.plan(&['a', 'b', 'c']);
-    let indexes = plan.build_indexes(&db);
-    let build_time = wcoj_start.elapsed();
-
-    // 2: Execute the join.
-    let t = Instant::now();
-    let exec = plan.bind(&indexes).expect("triangle query is non-empty");
-    let got = run_plan(&exec);
-    let exec_time = t.elapsed();
-    let total_time = wcoj_start.elapsed();
+    // 1 & 2: Plan, index and execute, with dynamically and statically dispatched operators.
+    let mut dynamic = symmetric_triangles(&db, rc_le());
+    let mut static_ = symmetric_triangles(&db, Le);
+    static_.keep_best(symmetric_triangles(&db, Le));
+    dynamic.keep_best(symmetric_triangles(&db, rc_le()));
 
     // 3: Canonical undirected triangles via the pre-oriented binary join, as ground truth.
     let t = Instant::now();
@@ -103,20 +94,65 @@ pub fn snap_triangles_symmetric(dataset: &str, max_edges: Option<usize>) {
 
     println!(
         "{dataset}: {} symmetrized edges -> {} triangles
-  wcoj build    {:>9.2?}
-  wcoj execute  {:>9.2?}
-  wcoj total    {:>9.2?}    found {:8} triangles
-  2-edge-filter {:>9.2?}    found {:8} triangles
+  operator dispatch   dynamic       static     (best of 2 runs each)
+  wcoj build        {:>9.2?}    {:>9.2?}
+  wcoj execute      {:>9.2?}    {:>9.2?}
+  wcoj total        {:>9.2?}    {:>9.2?}    found {:8} triangles
+  2-edge-filter     {:>9.2?}                found {:8} triangles
 ",
-        edges.len(), got.len(),
-        build_time,
-        exec_time,
-        total_time, got.len(),
+        edges.len(), dynamic.results.len(),
+        dynamic.build_time, static_.build_time,
+        dynamic.exec_time, static_.exec_time,
+        dynamic.total_time(), static_.total_time(), dynamic.results.len(),
         binary_time, want.len(),
     );
 
-    assert_eq!(got.len(), want.len(), "canonical triangle count mismatch");
-    assert!(got == want, "canonical triangle set mismatch");
+    assert_eq!(dynamic.results.len(), want.len(), "canonical triangle count mismatch");
+    assert!(dynamic.results == want, "canonical triangle set mismatch");
+    assert!(static_.results == dynamic.results, "static and dynamic dispatch disagree");
+}
+
+// One run of the symmetric triangle query: its results and how long each phase took.
+struct Run {
+    results: Vec<Vec<Value>>,
+    build_time: Duration,       // plan + build the trie indexes
+    exec_time: Duration,        // bind + execute depth-first
+}
+
+impl Run {
+    fn total_time(&self) -> Duration { self.build_time + self.exec_time }
+
+    // Keep the faster time of two runs of the same query, phase by phase.
+    fn keep_best(&mut self, other: Run) {
+        debug_assert!(self.results == other.results, "reruns disagree");
+        self.build_time = self.build_time.min(other.build_time);
+        self.exec_time = self.exec_time.min(other.exec_time);
+    }
+}
+
+// Plan, index and run E(a,b) E(b,c) E(a,c) with a <= b <= c, representing the two Le
+// operators as `Op`. Instantiating this at different `Op`s is the whole point: everything
+// downstream of the Query -- plan(), Level<Op>, the executor's proposer/filter calls -- is
+// generic in the operator representation, so each instantiation dispatches its own way.
+fn symmetric_triangles<Op: Operator + Clone>(db: &VecDb, le: Op) -> Run {
+    let q: Query<char, &'static str, Op> = Query {
+        vars: vec!['a', 'b', 'c'],
+        atoms: vec![atom("E", &['a', 'b']),
+                    atom("E", &['b', 'c']),
+                    atom("E", &['a', 'c'])],
+        operators: vec![Atom { pred: le.clone(), vars: vec!['a', 'b'] },   // a <= b
+                        Atom { pred: le, vars: vec!['b', 'c'] }],          // b <= c
+    };
+
+    let t = Instant::now();
+    let plan = q.plan(&['a', 'b', 'c']);
+    let indexes = plan.build_indexes(db);
+    let build_time = t.elapsed();
+
+    let t = Instant::now();
+    let exec = plan.bind(&indexes).expect("triangle query is non-empty");
+    let results = run_plan(&exec);
+    Run { results, build_time, exec_time: t.elapsed() }
 }
 
 // Run a plan depth-first, collect results, and sort. Like ExecutableQuery::collect_dfs but with a
