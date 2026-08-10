@@ -43,13 +43,10 @@ impl<Var, Rel, Op> Query<Var, Rel, Op>
 where Var: Clone+Hash+Eq, Rel:Clone+Hash+Eq, Op: Operator {
     // NB. O(n^2) in the # of variables.
     //
-    // Pick using only the hard rules above, plus the heuristic:
-    //
-    // - pick vars more strongly connected to already chosen vars.
-    //
-    // how strong is a connection? let's say: count the number of co-occurrences; a
-    // co-occurrence is an (atom,v,v') where v is the candidate variable, {v,v'} ⊆
-    // atom.vars, and v' is already in the chosen var order prefix.
+    // Pick using only the hard rules above, plus the heuristic: pick vars more strongly
+    // connected to already chosen vars. How strong is a connection? We count the number
+    // of co-occurrences (atom,v,v') where v is the candidate variable, v' is already
+    // chosen, and {v,v'} ⊆ atom.vars.
     //
     // Operators count as atoms throughout: sharing one is a weaker connection than sharing
     // a relational atom, but binding v still brings the operator closer to firing.
