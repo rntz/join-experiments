@@ -123,11 +123,61 @@ impl<Var: Eq+Hash+Clone, Rel: Eq+Hash+Clone, Op: Operator> Query<Var, Rel, Op> {
         todo!("check: every atom's length equals its relation's arity");
         todo!("check: every operator's vars.len() == arity");
         todo!("check: reject zero-variable operators (input_arity == 0 && !has_output), because we don't know how to plan them yet; add TODO comment that we ought to support them");
-        // A query is grounded if all its vars are grounded. An atom grounds all its
-        // variables. An operator grounds its output if its inputs are grounded. By
-        // applying these rules to saturation we can find the grounded variables.
-        todo!("check: query is grounded.");
+        // A query is grounded if all its vars are grounded.
+        todo!("check: query is grounded using self.ground_vars().");
     }
+
+    pub fn ground_vars(&self) -> Vec<Var> {
+        // An atom grounds all its variables. An operator grounds its output if its inputs
+        // are grounded. By applying these rules to saturation we can find the grounded
+        // variables.
+        todo!("find the set of grounded vars");
+    }
+
+    // ===== QUERY CONNECTEDNESS and its MALCONTENTS =====
+    //
+    // We want to ensure that we can pick a variable order while (a) only picking
+    // variables which are grounded given the previously chosen vars, and which (b) either
+    //
+    // - share an relational atom with an already-chosen var, or
+    // - are the output of an operator atom all of whose inputs are chosen.
+    //
+    // Ideally, we could also (c) start from any grounded variable and not have to
+    // backtrack.
+    //
+    // (a) is necessary for the var order to be executable. (b) makes execution more
+    // efficient - it avoids enumerating cross products. (c) makes the var order picker's
+    // job easier.
+    //
+    // In an fully relational, operator-free query, (a) always holds, and (b-c) hold iff
+    // the query hypergraph is connected. With operators, it's more complicated. E.g. if
+    // our query is
+    //
+    //     Q1(x,y,z) = R(x,y), x + y = z
+    //
+    // Then our variable order must start with x or y. This still satisfies our criteria.
+    // But consider:
+    //
+    //     Q2(x,y,z) = R(x,y), x + y = z, S(z)
+    //
+    // Now z is grounded by S, so we could start with z. But if we start with z, we must
+    // violate (b): x,y are not connected to z by any relational atom, and we can't fire
+    // the operator (x + y = z) knowing only z. So we must either ban Q2, or give up
+    // either (b) or (c). Banning Q2 but not Q1 is weird, though: the presence of S(z)
+    // makes Q2 *easier* to execute than Q1, so why ban Q2 and not Q1?
+    //
+    // For an even more pathological example:
+    //
+    //     Q3(x,y) = R(x), S(y), x + y = z
+    //
+    // There is no way to run this query without a cross product of R & S. So we must
+    // either ban this query (even though it's quite reasonable for small R/S) or give up
+    // on (b).
+    //
+    // I think the right answer long-term is to give up on one/both of (b-c) and have a
+    // smarter variable order picker.
+    //
+    // TODO: ok but what do we do RIGHT NOW?
 }
 
 

@@ -17,6 +17,7 @@ pub mod value;                // value representation
 pub mod hash;                 // FxHash and Map/Set based on hash
 pub mod op;                   // computational operators
 pub mod join;                 // databases, queries, query plans & execution
+pub mod var_order;            // variable order planning
 pub mod join_bfs;             // breadth-first query execution prototype
 // these are mainly for tests & benchmarking:
 pub mod vec_db;               // in-memory vec-of-row-vectors database
