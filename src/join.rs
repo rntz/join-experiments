@@ -168,16 +168,14 @@ impl<Var: Eq+Hash+Clone, Rel: Eq+Hash+Clone, Op: Operator> Query<Var, Rel, Op> {
     //
     // For an even more pathological example:
     //
-    //     Q3(x,y) = R(x), S(y), x + y = z
+    //     Q3(x,y,z) = R(x), S(y), x + y = z
     //
     // There is no way to run this query without a cross product of R & S. So we must
     // either ban this query (even though it's quite reasonable for small R/S) or give up
     // on (b).
     //
-    // I think the right answer long-term is to give up on one/both of (b-c) and have a
-    // smarter variable order picker.
-    //
-    // TODO: ok but what do we do RIGHT NOW?
+    // After discussion with Kris, we think the right answer is to give up on (b), but
+    // have a variable order picker that tries to avoid cross products if possible.
 }
 
 
