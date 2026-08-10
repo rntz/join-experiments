@@ -37,7 +37,7 @@ use std::hash::Hash;
 impl<Var, Rel, Op> Query<Var, Rel, Op>
 where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator
 {
-    fn structural_var_order(self: &Query) -> Vec<Var> {
+    fn structural_var_order(self: &Query<Var, Rel, Op>) -> Vec<Var> {
         // Pick using only the hard rules above, plus the heuristic:
         //
         // - pick vars more strongly connected to already chosen vars.
