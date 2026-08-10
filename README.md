@@ -18,6 +18,7 @@ hash-based tries; a query plan intersects them one variable at a time, either de
 | `src/vec_db.rs` | Trivial vector-based `Database` used by tests & benchmarks. |
 | `src/graph.rs` | SNAP dataset loading and reference triangle finders using binary joins. |
 | `tests/queries.rs` | Simple query correctness tests on tiny data. |
+| `tests/self_check.rs` | Tests for `Query::{ground_vars, self_check}` (query well-formedness). |
 | `examples/triangles.rs` | Triangle-counting benchmark over SNAP graphs. |
 | `examples/join-v1.rs` | Earlier standalone prototype; superseded by the library. |
 | `download_snap_datasets.sh` | Fetches SNAP graph datasets into `data/`. |

@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use crate::Value;
 
 // ---------- OPERATORS, or ATOMS THAT COMPUTE ----------
@@ -67,7 +69,9 @@ use crate::Value;
 //    picker is guaranteed to emit the output var immediately after all inputs are bound,
 //    so we're not really delaying.
 
-pub trait Operator {
+// Debug is a supertrait so that error messages can name the operator; it also gives us
+// `dyn Operator: Debug`, and hence Debug for the default `Rc<dyn Operator>` queries.
+pub trait Operator: Debug {
     // inputy_arity = number of input variables
     // arity        = number of input + output variables
     fn input_arity(&self) -> usize;
@@ -98,7 +102,7 @@ pub trait Operator {
 // through function pointers at runtime, which may be slower (esp. on WebAssembly).
 //
 // We use Rc instead of Box because Query::plan clones operators; Rc is cheap to clone.
-impl<Ptr: std::ops::Deref<Target = dyn Operator>> Operator for Ptr {
+impl<Ptr: Debug + std::ops::Deref<Target = dyn Operator>> Operator for Ptr {
     fn input_arity(&self) -> usize { (**self).input_arity() }
     fn has_output(&self) -> bool { (**self).has_output() }
     fn arity(&self) -> usize { (**self).arity() }
@@ -114,7 +118,7 @@ impl<Ptr: std::ops::Deref<Target = dyn Operator>> Operator for Ptr {
 
 // If your query has no operators, you could also use Empty.
 #[allow(dead_code)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Empty {}                   // useful representation if your query has no operators.
 impl Operator for Empty {
     #[inline] fn input_arity(&self) -> usize { match *self {} }

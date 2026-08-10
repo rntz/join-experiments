@@ -1,5 +1,6 @@
+use std::fmt::{self, Debug};
 use std::hash::Hash;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::Value;
@@ -116,22 +117,88 @@ pub struct Atom<Pred, Var> {
     // TODO: how do we represent constants in atoms?
 }
 
+// Shown as `pred(var1, ..., varN)`.
+impl<Pred: Debug, Var: Debug> Debug for Atom<Pred, Var> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}(", self.pred)?;
+        for (i, v) in self.vars.iter().enumerate() {
+            if i > 0 { write!(f, ", ")? }
+            write!(f, "{v:?}")?;
+        }
+        write!(f, ")")
+    }
+}
+
 impl<Var: Eq+Hash+Clone, Rel: Eq+Hash+Clone, Op: Operator> Query<Var, Rel, Op> {
-    #[allow(unreachable_code, dead_code, unused)]
-    fn self_check<Db: Database<Rel = Rel>>(&self, db: &Db) {
-        todo!("check: self.vars is distinct; no duplicates");
-        todo!("check: every atom's length equals its relation's arity");
-        todo!("check: every operator's vars.len() == arity");
-        todo!("check: reject zero-variable operators (input_arity == 0 && !has_output), because we don't know how to plan them yet; add TODO comment that we ought to support them");
+    // Panics if the query is malformed.
+    pub fn self_check<Db: Database<Rel = Rel>>(&self, db: &Db)
+        where Var: Debug, Rel: Debug
+    {
+        let mut declared: HashSet<&Var> = HashSet::new();
+        for v in &self.vars {
+            assert!(declared.insert(v), "duplicate query variable {v:?}");
+        }
+
+        for atom in &self.atoms {
+            assert_eq!(atom.vars.len(), db.arity(atom.pred.clone()),
+                       "atom {atom:?} has the wrong number of variables for its relation's arity");
+            for v in &atom.vars {
+                assert!(declared.contains(v), "atom {atom:?} uses {v:?}, which is not in query.vars");
+            }
+        }
+
+        for atom in &self.operators {
+            assert_eq!(atom.vars.len(), atom.pred.arity(),
+                       "operator {atom:?} has the wrong number of variables for its arity");
+            // TODO: support zero-variable operators; they're constant checks, so they
+            // belong at the very start of the query rather than at any variable's level.
+            assert!(!atom.vars.is_empty(),
+                    "operator {atom:?} has zero variables; we don't know how to plan those yet");
+            for v in &atom.vars {
+                assert!(declared.contains(v),
+                        "operator {atom:?} uses {v:?}, which is not in query.vars");
+            }
+        }
+
         // A query is grounded if all its vars are grounded.
-        todo!("check: query is grounded using self.ground_vars().");
+        let grounded: HashSet<Var> = self.ground_vars().into_iter().collect();
+        for v in &self.vars {
+            assert!(grounded.contains(v), "query variable {v:?} is not grounded");
+        }
     }
 
+    // Returns the grounded vars in the order we find them. Panics if an operator's
+    // vars.len() < its input_arity(); self_check() catches that first.
     pub fn ground_vars(&self) -> Vec<Var> {
         // An atom grounds all its variables. An operator grounds its output if its inputs
         // are grounded. By applying these rules to saturation we can find the grounded
         // variables.
-        todo!("find the set of grounded vars");
+        let mut found: Vec<Var> = Vec::new();
+        let mut grounded: HashSet<Var> = HashSet::new();
+        for atom in &self.atoms {
+            for v in &atom.vars {
+                if grounded.insert(v.clone()) { found.push(v.clone()) }
+            }
+        }
+        // Saturate by rescanning the operators until nothing new shows up. A more
+        // efficient approach would hashmap vars to which operators they touch instead of
+        // scanning them all; probably queries are small enough this doesn't matter.
+        let mut opers: Vec<&Atom<Op, Var>> = self.operators.iter()
+            .filter(|atom| atom.pred.has_output()).collect();
+        loop {
+            let count = found.len();
+            opers.retain(|atom| {
+                let op = &atom.pred;
+                let inputs = &atom.vars[..op.input_arity()];
+                let output = &atom.vars[op.input_arity()];
+                let fires = inputs.iter().all(|v| grounded.contains(v));
+                if fires && grounded.insert(output.clone()) {
+                    found.push(output.clone());
+                }
+                !fires
+            });
+            if found.len() == count { return found }
+        }
     }
 
     // ===== QUERY CONNECTEDNESS and its MALCONTENTS =====
