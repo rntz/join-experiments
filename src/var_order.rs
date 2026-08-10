@@ -34,6 +34,21 @@ use std::hash::Hash;
 //
 // XXX TODO XXX
 
+impl<Var, Rel, Op> Query<Var, Rel, Op>
+where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator
+{
+    fn structural_var_order(self: &Query) -> Vec<Var> {
+        // Pick using only the hard rules above, plus the heuristic:
+        //
+        // - pick vars more strongly connected to already chosen vars.
+        //
+        // how strong is a connection? let's say: count the number of co-occurrences; a
+        // co-occurrence is an (atom,v,v') where v is the candidate variable, {v,v'} ⊆
+        // atom.vars, and v' is already in the chosen var order prefix.
+        todo!("pick var order using only structural features and no statistics");
+    }
+}
+
 // =====  VARIABLE ORDER PICKING via CARDINALITY ESTIMATION =====
 //
 // The cost-based way to pick variables or plan queries:
