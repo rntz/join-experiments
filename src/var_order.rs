@@ -1,11 +1,16 @@
 #![allow(unused_variables, dead_code)]
 
 use crate::{Operator, Query, Atom};
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::collections::HashMap;
 use std::hash::Hash;
 
 // Hard rules of variable order picking:
+//
+// 0. Only pick grounded variables, otherwise we can't execute the query. A relational
+//    atom grounds all its vars; an operator grounds its output once its inputs are
+//    ground. (See Query::ground_vars().)
 //
 // 1. Immediately pick determined variables, for two reasons:
 //
@@ -17,35 +22,161 @@ use std::hash::Hash;
 //
 // 2. Always pick join vars before singleton vars (except for rule 1).
 //
-//    Non-join vars contribute no useful information for backtracking/pruning (except,
-//    again, outputs of operators).
-
-// Hard-enough rules of variable order picking:
+//    Non-join vars contribute no useful information for backtracking/pruning (except for
+//    operator outputs).
 //
-// 3. Always pick a variable connected by some atom to an already-chosen variable;
-//    otherwise we're enumerating a cross-product. If the query is connected, it's always
-//    possible to follow this rule. It's conceivable there might be situations where it's
-//    best to violate this rule: e.g. if the disconnected var has a small domain, and
-//    binding it allows some very selective operator to fire, maybe it could be worth it?
-//    My intuition is that this is rare, if possible. TODO: try to come up with such an
-//    example.
+// Heuristics for variable order picking:
+//
+// 3. When possible, pick a variable connected by some atom to an already-chosen variable;
+//    otherwise we're enumerating a cross-product. For purely relational (operator-free)
+//    queries, this is always possible if the query is connected. See "QUERY CONNECTEDNESS
+//    and its MALCONTENTS" note at bottom of this file for more.
+
+// ===== STRUCTURAL vs STATISTICAL PLANNING =====
+//
+// We can pick a variable order looking only at the query ("structural") or also looking
+// at some summary statistics for the database ("statistical"). I've implemented a
+// structural picker to start with; I'll get to the statistical one later. Here's the
+// structural one:
+
+use std::fmt::Debug;
 
 impl<Var, Rel, Op> Query<Var, Rel, Op>
-where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator
-{
-    fn structural_var_order(self: &Query<Var, Rel, Op>) -> Vec<Var> {
-        // Pick using only the hard rules above, plus the heuristic:
-        //
-        // - pick vars more strongly connected to already chosen vars.
-        //
-        // how strong is a connection? let's say: count the number of co-occurrences; a
-        // co-occurrence is an (atom,v,v') where v is the candidate variable, {v,v'} ⊆
-        // atom.vars, and v' is already in the chosen var order prefix.
-        todo!("pick var order using only structural features and no statistics");
+where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator {
+    // NB. O(n^2) in the # of variables.
+    //
+    // Pick using only the hard rules above, plus the heuristic:
+    //
+    // - pick vars more strongly connected to already chosen vars.
+    //
+    // how strong is a connection? let's say: count the number of co-occurrences; a
+    // co-occurrence is an (atom,v,v') where v is the candidate variable, {v,v'} ⊆
+    // atom.vars, and v' is already in the chosen var order prefix.
+    //
+    // Operators count as atoms throughout: sharing one is a weaker connection than sharing
+    // a relational atom, but binding v still brings the operator closer to firing.
+    #[allow(unused)]
+    pub fn structural_var_order(self: &Query<Var, Rel, Op>) -> Vec<Var> where Var: Debug {
+        // Relational atoms and operators, uniformly, as lists of vars.
+        let atoms: Vec<&[Var]> = self.atoms.iter().map(|a| &a.vars[..])
+            .chain(self.operators.iter().map(|a| &a.vars[..]))
+            .collect();
+        // var_atoms[v] = positions in `atoms` of the atoms mentioning v.
+        let mut var_atoms: HashMap<Var, Vec<usize>> = HashMap::new();
+        for (i, &vars) in atoms.iter().enumerate() {
+            for v in vars {
+                let v_atoms = var_atoms.entry(v.clone()).or_default();
+                // Avoid pushing the same atom twice if it uses a var twice.
+                if v_atoms.last() != Some(&i) { v_atoms.push(i) }
+            }
+        }
+        let var_atoms = var_atoms;
+        let degree = |v: &Var| var_atoms[v].len();
+
+        let mut order: Vec<Var> = Vec::with_capacity(self.vars.len());
+        let mut chosen: HashSet<Var> = HashSet::new();
+        // How many chosen vars each atom holds. Kept in sync with `chosen` below.
+        let mut chosen_count: Vec<usize> = vec![0; atoms.len()];
+        // Not-yet-fired operators with outputs.
+        let mut unfired: Vec<&Atom<Op, Var>> = self.operators.iter()
+            .filter(|atom| atom.pred.has_output())
+            .collect();
+        // Rule 0: We only consider vars grounded by relational atoms; outputs of
+        // operators get chosen by firing the operators once their inputs are chosen. We
+        // preserve the order of vars b/c we use that order as a tiebreak to ensure
+        // determinism.
+        let candidates: Vec<Var> = self.vars.iter()
+            .filter(|v| self.atoms.iter().any(|a| a.vars.contains(v)))
+            .cloned()
+            .collect();
+
+        loop {
+            // Rule 1: Fire any operators whose inputs are all chosen. This ensures we put
+            // determined variables first.
+            unfired.retain(|atom| {
+                let (inputs, outputs) = atom.vars.split_at(atom.pred.input_arity());
+                assert!(outputs.len() == 1);
+                let output = &outputs[0];
+                if chosen.contains(output) { return false; }
+                if inputs.iter().all(|v| chosen.contains(v)) {
+                    order.push(output.clone());
+                    chosen.insert(output.clone());
+                    for &i in &var_atoms[output] { chosen_count[i] += 1 }
+                    return false;
+                }
+                return true;
+            });
+
+            if order.len() == self.vars.len() { break }
+
+            // Pick a var according to rules 2 & 3 & heuristics.
+            let connectedness = |v: &Var| -> usize {
+                var_atoms[v].iter().map(|&i| chosen_count[i]).sum()
+            };
+            let next: &Var = candidates.iter()
+                .filter(|v| !chosen.contains(v))
+                .min_by_key(|v| (Reverse(degree(v) > 1),    // rule 2
+                                 Reverse(connectedness(v)), // connectedness heuristic / rule 3
+                                 Reverse(degree(v))))       // most constrained var
+                .expect("no atom can bind any remaining var; is the query grounded? \
+                         see Query::self_check");
+            chosen.insert(next.clone());
+            order.push(next.clone());
+            for &i in &var_atoms[next] { chosen_count[i] += 1 }
+        }
+        order
+    }
+
+    pub fn structural_var_order_backup(self: &Query<Var, Rel, Op>) -> Vec<Var> {
+        // Relational atoms and operators, uniformly, as lists of vars.
+        let atoms: Vec<&[Var]> = self.atoms.iter().map(|a| &a.vars[..])
+            .chain(self.operators.iter().map(|a| &a.vars[..]))
+            .collect();
+        // How often v occurs across all of them. degree(v) == 1 means v is a singleton var:
+        // binding it prunes nothing, so rule 2 leaves it for last.
+        let degree = |v: &Var| atoms.iter().flat_map(|vars| vars.iter()).filter(|&u| u == v).count();
+
+        let mut order: Vec<Var> = Vec::with_capacity(self.vars.len());
+        let mut chosen: HashSet<Var> = HashSet::new();
+        while order.len() < self.vars.len() {
+            // Co-occurrences of v with the vars chosen so far.
+            let connectedness = |v: &Var| -> usize {
+                atoms.iter().filter(|vars| vars.contains(v))
+                    .map(|vars| vars.iter().filter(|u| chosen.contains(*u)).count())
+                    .sum()
+            };
+            let next = self.determined_var(&chosen).unwrap_or_else(|| {
+                self.vars.iter()
+                    .filter(|&v| !chosen.contains(v)
+                            && self.atoms.iter().any(|a| a.vars.contains(v))) // rule 0
+                    // Rule 2, then rule 3 & the heuristic, then whichever var the query
+                    // constrains most. (min_by_key + Reverse maximizes the key; ties go to
+                    // the var declared first.)
+                    .min_by_key(|&v| (Reverse(degree(v) > 1),
+                                      Reverse(connectedness(v)),
+                                      Reverse(degree(v))))
+                    .expect("no atom can bind any remaining var; is the query grounded? \
+                             see Query::self_check")
+            }).clone();
+            chosen.insert(next.clone());
+            order.push(next);
+        }
+        order
+    }
+
+    // Rule 1: the output of an operator whose inputs are all chosen, if there is one.
+    fn determined_var<'a>(&'a self, chosen: &HashSet<Var>) -> Option<&'a Var> {
+        self.operators.iter().find_map(|atom| {
+            if !atom.pred.has_output() { return None }
+            let (inputs, output) = atom.vars.split_at(atom.pred.input_arity());
+            let ready = !chosen.contains(&output[0]) && inputs.iter().all(|v| chosen.contains(v));
+            ready.then_some(&output[0])
+        })
     }
 }
 
-// =====  VARIABLE ORDER PICKING via CARDINALITY ESTIMATION =====
+
+// ===== STATISTICAL VARIABLE ORDER PICKING via CARDINALITY ESTIMATION =====
 //
 // The cost-based way to pick variables or plan queries:
 //
@@ -64,6 +195,20 @@ where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator
 // The obvious greedy algorithm repeatedly picks the variable that minimizes the cost of
 // the prefix so far, until done. Better: a beam search. There are fancier approaches
 // (dynamic programming?) but I don't think we'll need them.
+
+// ===== OPTIMISTIC VS PESSIMISTIC ESTIMATORS =====
+//
+// There are ~two kinds of cardinality estimator: those that aim for the average
+// ("optimistic"); those that give a hard upper bound ("pessimistic"); or something in
+// between. Using "pessimistic" upper bounds is more robust against adversarial data /
+// less likely to pick a plan with a bad worst case, because it tries to pick the order
+// with the lowest upper bound / the best worst case. However, per the name, worst-case
+// optimal joins already have fairly good robustness, and a more optimistic estimate often
+// makes more efficient use of limited statistics to find a good variable order. So I lean
+// towards an optimistic estimator, even though these can be quite inaccurate (famous
+// paper: "How Good are Query Optimizers, Really?").
+//
+// TODO: explain typical "independence" assumption of cost estimators.
 
 #[derive(Clone)]
 struct Candidate<Var> {
@@ -138,16 +283,45 @@ fn beam_search<Var: Eq + Hash + Clone, Rel: Eq + Hash + Clone, Op: Operator>(
         .ok_or("should have found at least one order".into())
 }
 
-// ===== OPTIMISTIC VS PESSIMISTIC ESTIMATORS =====
+// ===== QUERY CONNECTEDNESS and its MALCONTENTS =====
 //
-// There are ~two kinds of cardinality estimator: those that aim for the average
-// ("optimistic"); those that give a hard upper bound ("pessimistic"); or something in
-// between. Using "pessimistic" upper bounds is more robust against adversarial data /
-// less likely to pick a plan with a bad worst case, because it tries to pick the order
-// with the lowest upper bound / the best worst case. However, per the name, worst-case
-// optimal joins already have fairly good robustness, and a more optimistic estimate often
-// makes more efficient use of limited statistics to find a good variable order. So I lean
-// towards an optimistic estimator, even though these can be quite inaccurate (famous
-// paper: "How Good are Query Optimizers, Really?").
+// We want to ensure that we can pick a variable order while (a) only picking
+// variables which are grounded given the previously chosen vars, and which (b) either
 //
-// TODO: explain typical "independence" assumption of cost estimators.
+// - share an relational atom with an already-chosen var, or
+// - are the output of an operator atom all of whose inputs are chosen.
+//
+// Ideally, we could also (c) start from any grounded variable and not have to
+// backtrack.
+//
+// (a) is necessary for the var order to be executable. (b) makes execution more
+// efficient - it avoids enumerating cross products. (c) makes the var order picker's
+// job easier.
+//
+// In an fully relational, operator-free query, (a) always holds, and (b-c) hold iff
+// the query hypergraph is connected. With operators, it's more complicated. E.g. if
+// our query is
+//
+//     Q1(x,y,z) = R(x,y), x + y = z
+//
+// Then our variable order must start with x or y. This still satisfies our criteria.
+// But consider:
+//
+//     Q2(x,y,z) = R(x,y), x + y = z, S(z)
+//
+// Now z is grounded by S, so we could start with z. But if we start with z, we must
+// violate (b): x,y are not connected to z by any relational atom, and we can't fire
+// the operator (x + y = z) knowing only z. So we must either ban Q2, or give up
+// either (b) or (c). Banning Q2 but not Q1 is weird, though: the presence of S(z)
+// makes Q2 *easier* to execute than Q1, so why ban Q2 and not Q1?
+//
+// For an even more pathological example:
+//
+//     Q3(x,y,z) = R(x), S(y), x + y = z
+//
+// There is no way to run this query without a cross product of R & S. So we must
+// either ban this query (even though it's quite reasonable for small R/S) or give up
+// on (b).
+//
+// After discussion with Kris, we think the right answer is to give up on (b), but
+// have a variable order picker that tries to avoid cross products if possible.
