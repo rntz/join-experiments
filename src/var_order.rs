@@ -40,7 +40,7 @@ use std::hash::Hash;
 // structural one:
 
 impl<Var, Rel, Op> Query<Var, Rel, Op>
-where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator {
+where Var: Clone+Hash+Eq, Rel:Clone+Hash+Eq, Op: Operator {
     // NB. O(n^2) in the # of variables.
     //
     // Pick using only the hard rules above, plus the heuristic:
