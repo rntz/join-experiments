@@ -123,15 +123,6 @@ where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator {
         }
         order
     }
-
-    // fn determined_var<'a>(&'a self, chosen: &HashSet<Var>) -> Option<&'a Var> {
-    //     self.operators.iter().find_map(|atom| {
-    //         if !atom.pred.has_output() { return None }
-    //         let (inputs, output) = atom.vars.split_at(atom.pred.input_arity());
-    //         let ready = !chosen.contains(&output[0]) && inputs.iter().all(|v| chosen.contains(v));
-    //         ready.then_some(&output[0])
-    //     })
-    // }
 }
 
 
