@@ -39,8 +39,6 @@ use std::hash::Hash;
 // structural picker to start with; I'll get to the statistical one later. Here's the
 // structural one:
 
-use std::fmt::Debug;
-
 impl<Var, Rel, Op> Query<Var, Rel, Op>
 where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator {
     // NB. O(n^2) in the # of variables.
@@ -56,7 +54,7 @@ where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator {
     // Operators count as atoms throughout: sharing one is a weaker connection than sharing
     // a relational atom, but binding v still brings the operator closer to firing.
     #[allow(unused)]
-    pub fn structural_var_order(self: &Query<Var, Rel, Op>) -> Vec<Var> where Var: Debug {
+    pub fn structural_var_order(self: &Query<Var, Rel, Op>) -> Vec<Var> {
         // Relational atoms and operators, uniformly, as lists of vars.
         let atoms: Vec<&[Var]> = self.atoms.iter().map(|a| &a.vars[..])
             .chain(self.operators.iter().map(|a| &a.vars[..]))
