@@ -30,10 +30,6 @@ use std::hash::Hash;
 //    My intuition is that this is rare, if possible. TODO: try to come up with such an
 //    example.
 
-// Heuristics for variable order picking:
-//
-// XXX TODO XXX
-
 impl<Var, Rel, Op> Query<Var, Rel, Op>
 where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator
 {
