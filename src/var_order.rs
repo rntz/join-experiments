@@ -53,7 +53,6 @@ where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator {
     //
     // Operators count as atoms throughout: sharing one is a weaker connection than sharing
     // a relational atom, but binding v still brings the operator closer to firing.
-    #[allow(unused)]
     pub fn structural_var_order(self: &Query<Var, Rel, Op>) -> Vec<Var> {
         // Relational atoms and operators, uniformly, as lists of vars.
         let atoms: Vec<&[Var]> = self.atoms.iter().map(|a| &a.vars[..])
@@ -125,52 +124,14 @@ where Var: Clone+Hash+Eq+Ord, Rel:Clone+Hash+Eq, Op: Operator {
         order
     }
 
-    pub fn structural_var_order_backup(self: &Query<Var, Rel, Op>) -> Vec<Var> {
-        // Relational atoms and operators, uniformly, as lists of vars.
-        let atoms: Vec<&[Var]> = self.atoms.iter().map(|a| &a.vars[..])
-            .chain(self.operators.iter().map(|a| &a.vars[..]))
-            .collect();
-        // How often v occurs across all of them. degree(v) == 1 means v is a singleton var:
-        // binding it prunes nothing, so rule 2 leaves it for last.
-        let degree = |v: &Var| atoms.iter().flat_map(|vars| vars.iter()).filter(|&u| u == v).count();
-
-        let mut order: Vec<Var> = Vec::with_capacity(self.vars.len());
-        let mut chosen: HashSet<Var> = HashSet::new();
-        while order.len() < self.vars.len() {
-            // Co-occurrences of v with the vars chosen so far.
-            let connectedness = |v: &Var| -> usize {
-                atoms.iter().filter(|vars| vars.contains(v))
-                    .map(|vars| vars.iter().filter(|u| chosen.contains(*u)).count())
-                    .sum()
-            };
-            let next = self.determined_var(&chosen).unwrap_or_else(|| {
-                self.vars.iter()
-                    .filter(|&v| !chosen.contains(v)
-                            && self.atoms.iter().any(|a| a.vars.contains(v))) // rule 0
-                    // Rule 2, then rule 3 & the heuristic, then whichever var the query
-                    // constrains most. (min_by_key + Reverse maximizes the key; ties go to
-                    // the var declared first.)
-                    .min_by_key(|&v| (Reverse(degree(v) > 1),
-                                      Reverse(connectedness(v)),
-                                      Reverse(degree(v))))
-                    .expect("no atom can bind any remaining var; is the query grounded? \
-                             see Query::self_check")
-            }).clone();
-            chosen.insert(next.clone());
-            order.push(next);
-        }
-        order
-    }
-
-    // Rule 1: the output of an operator whose inputs are all chosen, if there is one.
-    fn determined_var<'a>(&'a self, chosen: &HashSet<Var>) -> Option<&'a Var> {
-        self.operators.iter().find_map(|atom| {
-            if !atom.pred.has_output() { return None }
-            let (inputs, output) = atom.vars.split_at(atom.pred.input_arity());
-            let ready = !chosen.contains(&output[0]) && inputs.iter().all(|v| chosen.contains(v));
-            ready.then_some(&output[0])
-        })
-    }
+    // fn determined_var<'a>(&'a self, chosen: &HashSet<Var>) -> Option<&'a Var> {
+    //     self.operators.iter().find_map(|atom| {
+    //         if !atom.pred.has_output() { return None }
+    //         let (inputs, output) = atom.vars.split_at(atom.pred.input_arity());
+    //         let ready = !chosen.contains(&output[0]) && inputs.iter().all(|v| chosen.contains(v));
+    //         ready.then_some(&output[0])
+    //     })
+    // }
 }
 
 
