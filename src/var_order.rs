@@ -72,8 +72,6 @@ where Var: Clone+Hash+Eq, Rel:Clone+Hash+Eq, Op: Operator {
 
         let mut order: Vec<Var> = Vec::with_capacity(self.vars.len());
         let mut chosen: HashSet<Var> = HashSet::new();
-        // How many chosen vars each atom holds. Kept in sync with `chosen` below.
-        let mut chosen_count: Vec<usize> = vec![0; atoms.len()];
         // Not-yet-fired operators with outputs.
         let mut unfired: Vec<&Atom<Op, Var>> = self.operators.iter()
             .filter(|atom| atom.pred.has_output())
@@ -98,7 +96,6 @@ where Var: Clone+Hash+Eq, Rel:Clone+Hash+Eq, Op: Operator {
                 if inputs.iter().all(|v| chosen.contains(v)) {
                     order.push(output.clone());
                     chosen.insert(output.clone());
-                    for &i in &var_atoms[output] { chosen_count[i] += 1 }
                     return false;
                 }
                 return true;
@@ -108,7 +105,9 @@ where Var: Clone+Hash+Eq, Rel:Clone+Hash+Eq, Op: Operator {
 
             // Pick a var according to rules 2 & 3 & heuristics.
             let connectedness = |v: &Var| -> usize {
-                var_atoms[v].iter().map(|&i| chosen_count[i]).sum()
+                var_atoms[v].iter()
+                    .map(|&i| atoms[i].iter().filter(|u| chosen.contains(*u)).count())
+                    .sum()
             };
             let next: &Var = candidates.iter()
                 .filter(|v| !chosen.contains(v))
@@ -119,7 +118,6 @@ where Var: Clone+Hash+Eq, Rel:Clone+Hash+Eq, Op: Operator {
                          see Query::self_check");
             chosen.insert(next.clone());
             order.push(next.clone());
-            for &i in &var_atoms[next] { chosen_count[i] += 1 }
         }
         order
     }
