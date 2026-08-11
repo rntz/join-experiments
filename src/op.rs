@@ -178,12 +178,12 @@ impl Operator for Add {
     fn input_arity(&self) -> usize { 2 }
     fn has_output(&self) -> bool { true }
     fn check(&self, args: &[Value]) -> bool {
-        let &[x, y, z] = args else { panic!("Add::check wants 3 args") };
-        x.checked_add(y).expect("addition overflow") == z
+        let &[ref x, ref y, ref z] = args else { panic!("Add::check wants 3 args") };
+        x.untag::<usize>().checked_add(y.untag()).expect("addition overflow") == z.untag()
     }
     fn compute(&self, inputs: &[Value]) -> Option<Value> {
-        let &[x, y] = inputs else { panic!("Add::compute wants 2 inputs") };
-        Some(x.checked_add(y).expect("addition overflow"))
+        let &[ref x, ref y] = inputs else { panic!("Add::compute wants 2 inputs") };
+        Some(x.untag::<usize>().checked_add(y.untag()).expect("addition overflow").into())
     }
 }
 
@@ -194,8 +194,8 @@ impl Operator for Le {
     fn input_arity(&self) -> usize { 2 }
     fn has_output(&self) -> bool { false }
     fn check(&self, args: &[Value]) -> bool {
-        let &[x, y] = args else { panic!("Le::check wants 2 args") };
-        x <= y
+        let &[ref x, ref y] = args else { panic!("Le::check wants 2 args") };
+        x.untag::<usize>() <= y.untag::<usize>()
     }
     fn compute(&self, _: &[Value]) -> Option<Value> {
         panic!("Le has no output; do not call compute()")

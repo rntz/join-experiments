@@ -10,7 +10,7 @@ use std::time::Instant;
 use rntz_joins::op::Le;
 use rntz_joins::{
     binary_triangles_directed, binary_triangles_undirected, edge_db, snap_load, symmetrize,
-    to_low_high, Atom, ExecutableQuery, Operator, Query, Value,
+    to_low_high, Atom, ExecutableQuery, Operator, Query,
 };
 
 // An atom over relation `rel` with the given variables.
@@ -121,11 +121,11 @@ pub fn snap_triangles_symmetric(dataset: &str, max_edges: Option<usize>) {
 
 // Run a plan depth-first, collect results, and sort. Like ExecutableQuery::collect_dfs but with a
 // progress print every million results, since the big datasets take a while.
-fn run_plan<Op: Operator>(plan: &ExecutableQuery<Op>) -> Vec<Vec<Value>> {
-    let mut out: Vec<Vec<Value>> = Vec::new();
+fn run_plan<Op: Operator>(plan: &ExecutableQuery<Op>) -> Vec<Vec<usize>> {
+    let mut out: Vec<Vec<usize>> = Vec::new();
     let mut counter: usize = 0;
     plan.execute_dfs(|row| {
-        out.push(row.to_vec());
+        out.push(row.iter().map(|x| x.untag()).collect());
         counter += 1;
         if counter.is_multiple_of(1_000_000) {
             println!("found {:2} million results!", counter / 1_000_000);
@@ -224,7 +224,10 @@ pub fn snap_triangles_undirected(dataset: &str, max_edges: Option<usize>) {
 
     // 2b: Execute the join breadth-first.
     let t = Instant::now();
-    let got_bfs = exec.collect_bfs();
+    // As collect_dfs, but breadth-first. Lets callers compare the two execution strategies.
+    let mut got_bfs: Vec<Vec<usize>> = Vec::new();
+    exec.execute_bfs(|row| got_bfs.push(row.iter().map(|x| x.untag()).collect()));
+    got_bfs.sort_unstable();
     let bfs_time = t.elapsed();
 
     // 3: Binary join for comparison.

@@ -13,6 +13,11 @@ macro_rules! print_flush {
     }};
 }
 
+#[macro_export]
+macro_rules! row {
+    [$($e:expr),*] => (vec![$($crate::value::ValueType::to_value($e)),*])
+}
+
 pub mod value;                // value representation
 pub mod hash;                 // FxHash and Map/Set based on hash
 pub mod op;                   // computational operators
@@ -23,7 +28,7 @@ pub mod join_bfs;             // breadth-first query execution prototype
 pub mod vec_db;               // in-memory vec-of-row-vectors database
 pub mod graph;                // graph db utilities
 
-pub use value::Value;
+pub use value::{Value, ValueType, TagError};
 pub use op::Operator;
 pub use join::{
     Atom, Database, ExecutableQuery, IndexColumnShape, Indexes, Level,

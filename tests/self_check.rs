@@ -7,11 +7,12 @@ use std::rc::Rc;
 
 use rntz_joins::{Atom, Operator, Query, VecDb};
 use rntz_joins::op;
+use rntz_joins::row;
 
 fn db() -> VecDb {
     VecDb::new()
-        .rel("E", 2, vec![vec![0, 1], vec![1, 2]])
-        .rel("T", 1, vec![vec![5]])
+        .rel("E", 2, vec![row![0, 1], row![1, 2]])
+        .rel("T", 1, vec![row![5]])
 }
 
 fn atom(rel: &'static str, vars: &[char]) -> Atom<&'static str, char> {

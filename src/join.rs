@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::Value;
+use crate::ValueType;
 use crate::hash::Map;
 use crate::op::Operator;
 
@@ -632,10 +633,16 @@ impl<'a, Op: Operator> ExecutableQuery<'a, Op> {
         }.execute(0)
     }
 
-    // Convenience wrapper used by tests and benchmarks.
+    // Convenience wrappers used by tests and benchmarks.
     pub fn collect_dfs(&self) -> Vec<Vec<Value>> {
         let mut out: Vec<Vec<Value>> = Vec::new();
         self.execute_dfs(|row| out.push(row.to_vec()));
+        out.sort_unstable();
+        out
+    }
+    pub fn collect_dfs_untagged<V: ValueType + Ord>(&self) -> Vec<Vec<V>> {
+        let mut out: Vec<Vec<V>> = Vec::new();
+        self.execute_dfs(|row| out.push(row.iter().map(|x| x.untag()).collect()));
         out.sort_unstable();
         out
     }
@@ -762,9 +769,9 @@ mod tests {
     }
 
     // Child of a node under `key` (panics if absent or if node is a Leaf).
-    fn child(node: &Trie, key: Value) -> &Trie {
+    fn child(node: &Trie, key: usize) -> &Trie {
         match node {
-            Trie::Node(map) => map.get(&key).expect("missing key"),
+            Trie::Node(map) => map.get(&key.into()).expect("missing key"),
             Trie::Leaf => panic!("expected a Trie::Node, got a Leaf"),
         }
     }
@@ -774,38 +781,38 @@ mod tests {
     #[test]
     fn test_trie_build() {
         let db = VecDb::new()
-            .rel("E", 2, vec![vec![0, 1], vec![0, 2], vec![1, 2]])
-            .rel("R", 2, vec![vec![0, 0], vec![1, 2], vec![3, 3], vec![2, 2]])
-            .rel("S", 2, vec![vec![0, 1], vec![1, 0]])
-            .rel("T", 1, vec![vec![5], vec![6]]);
+            .rel("E", 2, vec![row![0, 1], row![0, 2], row![1, 2]])
+            .rel("R", 2, vec![row![0, 0], row![1, 2], row![3, 3], row![2, 2]])
+            .rel("S", 2, vec![row![0, 1], row![1, 0]])
+            .rel("T", 1, vec![row![5], row![6]]);
 
         // Forward index E(x,y): level 0 = col 0, level 1 = col 1.
         let fwd = Trie::build(&db, "E", &vec![TrieLevel(0), TrieLevel(1)]).unwrap();
-        assert_eq!(keys(&fwd), vec![0, 1]);
-        assert_eq!(keys(child(&fwd, 0)), vec![1, 2]);
-        assert_eq!(keys(child(&fwd, 1)), vec![2]);
+        assert_eq!(keys(&fwd), row![0, 1]);
+        assert_eq!(keys(child(&fwd, 0)), row![1, 2]);
+        assert_eq!(keys(child(&fwd, 1)), row![2]);
         assert!(is_leaf(child(child(&fwd, 0), 1)));
 
         // Backward index E(x,y) with a *swapped* shape: level 0 = col 1 (the
         // destination), level 1 = col 0 (the source). So top-level keys are the
         // set of destinations.
         let bwd = Trie::build(&db, "E", &vec![TrieLevel(1), TrieLevel(0)]).unwrap();
-        assert_eq!(keys(&bwd), vec![1, 2]);       // destinations
-        assert_eq!(keys(child(&bwd, 2)), vec![0, 1]); // sources of edges into 2
+        assert_eq!(keys(&bwd), row![1, 2]);       // destinations
+        assert_eq!(keys(child(&bwd, 2)), row![0, 1]); // sources of edges into 2
 
         // R(x,x): EqColumn(0) keeps only rows where col1 == col0; depth-1 trie.
         let diag = Trie::build(&db, "R", &vec![TrieLevel(0), EqColumn(0)]).unwrap();
-        assert_eq!(keys(&diag), vec![0, 2, 3]);
+        assert_eq!(keys(&diag), row![0, 2, 3]);
         assert!(is_leaf(child(&diag, 0)));
 
         // S has no diagonal rows, so R(x,x)-style build over S is empty -> None.
         assert!(Trie::build(&db, "S", &vec![TrieLevel(0), EqColumn(0)]).is_none());
 
         // Zero-level (fully constant) atom via EqConst: Some(Leaf) iff a match exists.
-        match Trie::build(&db, "T", &vec![EqConst(5)]) {
+        match Trie::build(&db, "T", &vec![EqConst(5.into())]) {
             Some(Trie::Leaf) => {}
             other => panic!("T(5) should build Some(Leaf), got {:?}", other.is_some()),
         }
-        assert!(Trie::build(&db, "T", &vec![EqConst(9)]).is_none());
+        assert!(Trie::build(&db, "T", &vec![EqConst(9.into())]).is_none());
     }
 }

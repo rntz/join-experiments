@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use rntz_joins::IndexColumnShape::{EqColumn, TrieLevel};
 use rntz_joins::{
-    binary_triangles_directed, binary_triangles_undirected, edge_db, to_low_high, Atom,
-    Operator, Query, QueryPlan, Value, VecDb,
+    binary_triangles_directed, binary_triangles_undirected, edge_db, to_low_high, row,
+    Atom, Operator, Query, QueryPlan, VecDb,
 };
 use rntz_joins::op;
 
@@ -33,7 +33,7 @@ fn level_atoms<R, Op>(plan: &QueryPlan<R, Op>) -> Vec<Vec<usize>> {
 // ---- planning the directed triangle: two shared indexes, the documented plan. ----
 #[test]
 fn test_triangle() {
-    let edges: Vec<(Value, Value)> = vec![
+    let edges: Vec<(usize, usize)> = vec![
         (0, 1), (1, 2), (2, 0), (0, 2), (2, 1), (1, 0), (1, 3), (3, 1),
     ];
     let db = edge_db(&edges);
@@ -57,13 +57,14 @@ fn test_triangle() {
     assert_eq!(indexes.len(), 2, "fwd and bwd are the only distinct indexes");
 
     let exec = plan.bind(&indexes).expect("triangle query is non-empty");
-    assert_eq!(exec.collect_dfs(), binary_triangles_directed(&edges), "triangle join");
+    let got = exec.collect_dfs_untagged::<usize>();
+    assert_eq!(got, binary_triangles_directed(&edges), "triangle join");
 }
 
 // ---- planning a 2-path E(x,y) E(y,z): a single index shared by both atoms. ----
 #[test]
 fn test_path() {
-    let edges: Vec<(Value, Value)> = vec![(0, 1), (1, 2), (1, 3), (2, 3), (3, 0)];
+    let edges: Vec<(usize, usize)> = vec![(0, 1), (1, 2), (1, 3), (2, 3), (3, 0)];
     let db = edge_db(&edges);
     let q: Query<char, &'static str> = Query {
         vars: vec!['x', 'y', 'z'],
@@ -82,21 +83,21 @@ fn test_path() {
     assert_eq!(indexes.len(), 1, "both atoms share one index");
 
     let exec = plan.bind(&indexes).expect("path query is non-empty");
-    let mut want: Vec<Vec<Value>> = Vec::new();
+    let mut want: Vec<Vec<usize>> = Vec::new();
     for &(x, y) in &edges {
         for &(y2, z) in &edges {
             if y2 == y { want.push(vec![x, y, z]); }
         }
     }
     want.sort_unstable();
-    assert_eq!(exec.collect_dfs(), want, "path join");
+    assert_eq!(exec.collect_dfs_untagged::<usize>(), want, "path join");
 }
 
 // ---- planning a self-join R(x,x): the repeated variable becomes an EqColumn. ----
 #[test]
 fn test_self_loop() {
     let db = VecDb::new().rel(
-        "R", 2, vec![vec![0, 0], vec![1, 1], vec![2, 3], vec![4, 4], vec![5, 6]],
+        "R", 2, vec![row![0, 0], row![1, 1], row![2, 3], row![4, 4], row![5, 6]],
     );
     let q: Query<char, &'static str> = Query {
         vars: vec!['x'],
@@ -110,7 +111,11 @@ fn test_self_loop() {
 
     let indexes = plan.build_indexes(&db);
     let exec = plan.bind(&indexes).expect("self-loop query is non-empty");
-    assert_eq!(exec.collect_dfs(), vec![vec![0], vec![1], vec![4]], "plan self-loop");
+    assert_eq!(
+        exec.collect_dfs_untagged::<usize>(),
+        vec![vec![0], vec![1], vec![4]],
+        "plan self-loop",
+    );
 }
 
 // ---- an empty index sinks the whole query: bind returns None. ----
@@ -119,7 +124,7 @@ fn test_self_loop() {
 // results and bind short-circuits.
 #[test]
 fn test_empty_index() {
-    let db = VecDb::new().rel("S", 2, vec![vec![0, 1], vec![1, 0]]); // no (a,a) rows
+    let db = VecDb::new().rel("S", 2, vec![row![0, 1], row![1, 0]]); // no (a,a) rows
     let q: Query<char, &'static str> = Query {
         vars: vec!['x'],
         atoms: vec![atom("S", &['x', 'x'])],
@@ -134,7 +139,7 @@ fn test_empty_index() {
 // ---- planning the undirected triangle E(x,y) E(y,z) E(x,z): all three atoms one index. ----
 #[test]
 fn test_undirected_triangle() {
-    let raw: Vec<(Value, Value)> = vec![
+    let raw: Vec<(usize, usize)> = vec![
         (1, 0), (1, 2), (2, 0), (0, 3), (3, 4), (4, 0), (2, 2), (0, 1),
     ];
     let edges = to_low_high(&raw);
@@ -158,7 +163,7 @@ fn test_undirected_triangle() {
     assert_eq!(indexes.len(), 1, "all three atoms share one index");
 
     let exec = plan.bind(&indexes).expect("undirected triangle is non-empty");
-    let got = exec.collect_dfs();
+    let got = exec.collect_dfs_untagged::<usize>();
     assert_eq!(got, binary_triangles_undirected(&edges), "same results as direct computation");
     assert_eq!(got, vec![vec![0, 1, 2], vec![0, 3, 4]], "expected exactly two triangles");
 }
@@ -182,7 +187,7 @@ fn check_bfs_matches_dfs(q: &Query<char, &'static str>, order: &[char], db: &Vec
 #[test]
 fn test_bfs_matches_dfs() {
     // Directed triangle E(x,y) E(y,z) E(z,x) (shared + swapped tries).
-    let tedges: Vec<(Value, Value)> = vec![
+    let tedges: Vec<(usize, usize)> = vec![
         (0, 1), (1, 2), (2, 0), (0, 2), (2, 1), (1, 0), (1, 3), (3, 1),
     ];
     let tri: Query<char, &'static str> = Query {
@@ -193,7 +198,7 @@ fn test_bfs_matches_dfs() {
     check_bfs_matches_dfs(&tri, &['x', 'y', 'z'], &edge_db(&tedges));
 
     // Path E(x,y) E(y,z) (a single trie shared across two levels).
-    let pedges: Vec<(Value, Value)> = vec![(0, 1), (1, 2), (1, 3), (2, 3), (3, 0)];
+    let pedges: Vec<(usize, usize)> = vec![(0, 1), (1, 2), (1, 3), (2, 3), (3, 0)];
     let path: Query<char, &'static str> = Query {
         vars: vec!['x', 'y', 'z'],
         atoms: vec![atom("E", &['x', 'y']), atom("E", &['y', 'z'])],
@@ -203,7 +208,7 @@ fn test_bfs_matches_dfs() {
 
     // Self-loop R(x,x) (a depth-1 EqColumn trie).
     let sdb = VecDb::new().rel(
-        "R", 2, vec![vec![0, 0], vec![1, 1], vec![2, 3], vec![4, 4], vec![5, 6]],
+        "R", 2, vec![row![0, 0], row![1, 1], row![2, 3], row![4, 4], row![5, 6]],
     );
     let loop_: Query<char, &'static str> = Query {
         vars: vec!['x'],
@@ -223,7 +228,7 @@ fn test_bfs_matches_dfs() {
 // sole proposer: at level s it computes a+b and emits it (no trie to intersect against).
 #[test]
 fn test_op_addition_proposes() {
-    let edges: Vec<(Value, Value)> = vec![(1, 2), (3, 4)];
+    let edges: Vec<(usize, usize)> = vec![(1, 2), (3, 4)];
     let db = edge_db(&edges);
     let q: Query<char, &'static str> = Query {
         vars: vec!['a', 'b', 's'],
@@ -233,7 +238,7 @@ fn test_op_addition_proposes() {
     let plan = q.plan(&['a', 'b', 's']);
     let indexes = plan.build_indexes(&db);
     let exec = plan.bind(&indexes).expect("query is non-empty");
-    assert_eq!(exec.collect_dfs(), vec![vec![1, 2, 3], vec![3, 4, 7]]);
+    assert_eq!(exec.collect_dfs_untagged::<usize>(), vec![vec![1, 2, 3], vec![3, 4, 7]]);
 }
 
 // ---- operators: a check-operator (Le) filtering bindings. ----
@@ -242,7 +247,7 @@ fn test_op_addition_proposes() {
 // (its last variable); rows with a > b are dropped.
 #[test]
 fn test_op_leq_filters() {
-    let edges: Vec<(Value, Value)> = vec![(1, 2), (2, 1), (3, 3)];
+    let edges: Vec<(usize, usize)> = vec![(1, 2), (2, 1), (3, 3)];
     let db = edge_db(&edges);
     let q: Query<char, &'static str> = Query {
         vars: vec!['a', 'b'],
@@ -252,7 +257,7 @@ fn test_op_leq_filters() {
     let plan = q.plan(&['a', 'b']);
     let indexes = plan.build_indexes(&db);
     let exec = plan.bind(&indexes).expect("query is non-empty");
-    assert_eq!(exec.collect_dfs(), vec![vec![1, 2], vec![3, 3]]);
+    assert_eq!(exec.collect_dfs_untagged::<usize>(), vec![vec![1, 2], vec![3, 3]]);
 }
 
 // ---- operators: a compute-operator used as a check when its output isn't proposed. ----
@@ -263,7 +268,7 @@ fn test_op_leq_filters() {
 #[test]
 fn test_op_addition_checks() {
     let db = VecDb::new().rel(
-        "T", 3, vec![vec![3, 1, 2], vec![4, 1, 2], vec![4, 2, 2], vec![1, 0, 0]],
+        "T", 3, vec![row![3, 1, 2], row![4, 1, 2], row![4, 2, 2], row![1, 0, 0]],
     );
     let q: Query<char, &'static str> = Query {
         vars: vec!['a', 'b', 'c'],
@@ -273,5 +278,5 @@ fn test_op_addition_checks() {
     let plan = q.plan(&['a', 'b', 'c']);
     let indexes = plan.build_indexes(&db);
     let exec = plan.bind(&indexes).expect("query is non-empty");
-    assert_eq!(exec.collect_dfs(), vec![vec![3, 1, 2], vec![4, 2, 2]]);
+    assert_eq!(exec.collect_dfs_untagged::<usize>(), vec![vec![3, 1, 2], vec![4, 2, 2]]);
 }

@@ -68,7 +68,7 @@ fn test_determined_immediately() {
 
     // A constant is determined before anything else.
     let atoms = vec![atom("E", &['x', 'y'])];
-    assert_eq!(order(&['x', 'y'], atoms, vec![op_atom(Const(2), &['y'])]), vec!['y', 'x']);
+    assert_eq!(order(&['x', 'y'], atoms, vec![op_atom(Const(2.into()), &['y'])]), vec!['y', 'x']);
 }
 
 // Sharing an operator counts as a connection: x,z are join vars, so we bind them (and run
