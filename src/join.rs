@@ -366,7 +366,7 @@ impl Trie {
                 let deepest = level == n_levels - 1;
                 match node {
                     Trie::Node(map) => {
-                        node = map.entry(row[col]).or_insert_with(|| {
+                        node = map.entry(row[col].clone()).or_insert_with(|| {
                             if deepest { Trie::Leaf } else { Trie::Node(TrieMap::default()) }
                         });
                     }
@@ -656,7 +656,7 @@ impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
     // Copy the given prefix positions into `input_buf`, in order.
     fn gather(&mut self, positions: &[usize]) {
         self.input_buf.clear();
-        for &pos in positions { self.input_buf.push(self.prefix[pos]); }
+        for &pos in positions { self.input_buf.push(self.prefix[pos].clone()); }
     }
 
     // Run this level's filter operators.
@@ -742,12 +742,12 @@ impl<'a, Op: Operator, F: FnMut(&[Value])> QueryDfsState<'a, Op, F> {
             let Some(child) = self.saved[mark + pos].get(key) else { return };
             self.set_trie(level.atoms[pos], child);
         }
-        self.prefix.push(*key);
+        self.prefix.push(key.clone());
         if self.filters_pass(&level.filters) {
             self.execute(level_idx + 1);
         }
         let popped = self.prefix.pop();
-        debug_assert!(popped == Some(*key));
+        debug_assert!(popped == Some(key.clone()));
     }
 }
 
@@ -767,7 +767,7 @@ mod tests {
     // Sorted keys of a trie node's map.
     fn keys(node: &Trie) -> Vec<Value> {
         match node {
-            Trie::Node(map) => { let mut k: Vec<Value> = map.keys().copied().collect(); k.sort(); k }
+            Trie::Node(map) => { let mut k: Vec<Value> = map.keys().cloned().collect(); k.sort(); k }
             Trie::Leaf => panic!("expected a Trie::Node, got a Leaf"),
         }
     }

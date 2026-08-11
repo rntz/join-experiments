@@ -34,7 +34,7 @@ impl Operator for Const {
     fn input_arity(&self) -> usize { 0 }
     fn has_output(&self) -> bool { true }
     fn check(&self, args: &[Value]) -> bool { args[0] == self.0 }
-    fn compute(&self, _: &[Value]) -> Option<Value> { Some(self.0) }
+    fn compute(&self, _: &[Value]) -> Option<Value> { Some(self.0.clone()) }
 }
 
 // Every var of a triangle is a join var of the same degree, so ties send us through the

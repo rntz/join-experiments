@@ -103,11 +103,11 @@ impl<'a, Op: Operator> ExecutableQuery<'a, Op> {
                     if last {
                         out.clear();
                         out.extend_from_slice(pfx);
-                        out.push(*key);
+                        out.push(key.clone());
                         f(&out);
                     } else {
                         next_prefixes.extend_from_slice(pfx);
-                        next_prefixes.push(*key);
+                        next_prefixes.push(key.clone());
                         // Copy this solution's nodes, then descend the atoms in this level to
                         // their child under `key`. A Leaf child bottoms out and is never read.
                         let base = next_nodes.len();

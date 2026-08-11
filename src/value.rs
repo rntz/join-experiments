@@ -24,12 +24,12 @@
 // ==================== STRUCT of USIZE (strategy 2) ====================
 //
 // Values are represented by a simple struct wrapping usize:
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] // TODO: stop deriving Copy!
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Value(usize);
 
 // The purpose of the struct is future-proofing: it requires explicitly converting into
-// and out of Value. This will make it easier to switch to a tagged representation later
-// if desired.
+// and out of Value, and require clone() to copy a value. This makes it easier to switch
+// to a tagged representation later if desired.
 
 use std::convert::Infallible;
 use std::fmt::Debug;
@@ -45,18 +45,18 @@ impl From<usize> for Value { fn from(x: usize) -> Value { Value(x) } }
 // A type that can be converted to Value by tagging, and out of Value by tag checking.
 pub trait ValueType: Sized {
     fn to_value(self) -> Value;
-    fn from_value(value: Value) -> Result<Self, TagError>;
+    fn from_value(value: &Value) -> Result<Self, TagError>;
 }
 pub type TagError = Infallible; // no tag errors exist in this representation.
 
 impl ValueType for usize {
     fn to_value(self) -> Value { Value(self) }
-    fn from_value(value: Value) -> Result<usize, TagError> { Ok(value.0) }
+    fn from_value(value: &Value) -> Result<usize, TagError> { Ok(value.0) }
 }
 
 // Convenience method for tag-checking & unwrapping.
 impl Value {
-    pub fn untag<X: ValueType>(self) -> X { let Ok(v) = X::from_value(self); v }
+    pub fn untag<X: ValueType>(&self) -> X { let Ok(v) = X::from_value(self); v }
 }
 
 
