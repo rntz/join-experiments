@@ -8,16 +8,12 @@ use crate::ValueType;
 use crate::hash::Map;
 use crate::op::Operator;
 
-// ---------- NEXT THINGS TO IMPLEMENT ----------
+// TODO: bring this comment up to date. place it in README.md.
 //
-// 0. Pick a variable order in a vaguely reasonable way.
-//    heuristics to start with:
-//    - join keys first
-//    - connectedness (pick keys that are constrained by previous ones)
-//    I think I built something like this in Racket once? go rummage around for it.
+// ---------- TO IMPLEMENT ----------
 //
 // 0. Representing & chasing FDs.
-
+//
 // ---------- STEPS FOR EXECUTING A QUERY ----------
 //
 // 0. Intern all values so everything is usize and equality is equality. This avoids
@@ -67,9 +63,9 @@ use crate::op::Operator;
 //
 // TODO: how do I incorporate functional dependency information here?
 //
-// ANSWER: simplest way is to let each relation declare a primary key, which all other
-// keys are determined by. This is less general than full FDs but easier to represent and
-// plan around and handles ACSet-type schemas.
+// ANSWER: simplest way is to let each relation declare an optional primary key, which all
+// other keys are determined by. This is less general than full FDs but easier to
+// represent and plan around and handles ACSet-type schemas.
 pub trait Database {
     // TODO: separate into Schema and Database.
     // Schema should be a struct with arity & FDs for each Rel. Map<Rel, RelInfo>?
@@ -77,9 +73,17 @@ pub trait Database {
     type Rel: Eq + Hash + Clone; // relation identifier.
     fn arity(&self, r: Self::Rel) -> usize;
     fn count(&self, r: Self::Rel) -> usize;
-    // This assumes a row-oriented representation. for a columnar representation, maybe
-    // Item = &[&Value], a slice of pointers to entries in each column?
+    // Producing an external Iterator basically requires a row-oriented representation.
     fn rows(&self, r: Self::Rel) -> impl Iterator<Item = &[Value]>;
+    // TODO: Instead we should replace all uses of rows() with scan(), which allows any
+    // representation you like:
+    fn scan<F: FnMut(&[Value])>(&self, r: Self::Rel, mut process_row: F) {
+        for row in self.rows(r) { process_row(row) }
+    }
+    // We could perhaps improve scan() by replacing the row-slice &[Value] with a slice of
+    // pointers &[&Value]. This means that if the callback doesn't access a particular
+    // column, it won't even fetch it from memory. However, currently we only call
+    // rows()/scan() once to build indexes, which need all the columns anyways.
 }
 
 // Var, Rel, Op stand for variable, relation, and computational operator identifiers.
