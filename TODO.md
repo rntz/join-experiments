@@ -6,7 +6,27 @@
 
 # THINGS TO MAYBE DO BEFORE LEAVING.
 
+- move big comment from join.rs into README.md
+
+- FDs in the schema, use them in var order picker
+- Query::run() that undoes the var order in final results
 - constants in atoms
+- replace rows() by scan()
+- test the variable order picker end-to-end in query execution
+- quarantine the half-finished beam search code.
+
+# WHAT SHOULD I WRITE UP BEFORE LEAVING
+
+- HOW TO HANDLE MUTATION:
+  diffs & delta queries
+  reuse query infrastructure to run delta queries
+  maintain indexes over updates
+  link to "Fixing Incremental Computation", cite the correct figure.
+
+- HOW TO DO A COST BASED QUERY PLANNER
+  how do you estimate the size using the independence assumption?
+
+- explain WCOJs and asymptotics.
 
 # High level goals not started on yet
 
