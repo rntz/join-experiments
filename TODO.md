@@ -1,3 +1,13 @@
+- triangles.rs: Why is OPERATOR-FILTERED so slow on cit-HepTh?
+  is this a regression?
+
+- triangles.rs: why is tagged slower than untagged on cit-HepTh on OPERATOR-FILTERED? is
+  this expected? seems expected: operators need to check tags now. write it up.
+
+# THINGS TO MAYBE DO BEFORE LEAVING.
+
+- constants in atoms
+
 # High level goals not started on yet
 
 - aggregations
