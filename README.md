@@ -51,18 +51,16 @@ query.self_check(&db); // check query is well-formed.
 let var_order = query.structural_var_order();
 let plan = query.plan(&var_order);
 let indexes = plan.build_indexes(&db);
-// Get an ExecutableQuery by binding indexes to plan.
-let Some(exec) = plan.bind(&indexes) else {
-  // If a relation involved is empty, binding the plan will fail;
-  // this indicates no query results.
-  return;
+// Get an ExecutableQuery by binding indexes to plan. If a relation involved is
+// empty, binding the plan will fail; this indicates no query results.
+if let Some(exec) = plan.bind(&indexes) {
+    // Iterate over solutions.
+    exec.execute_dfs(|solution| {
+        // solution[i] = value for of var_order[i].
+        // If you want them in the order of `query.vars`, do the remapping here.
+        do_something_with(solution)
+    });
 }
-// Iterate over solutions.
-exec.execute_dfs(|solution| {
-    // solution[i] = value for of var_order[i].
-    // If you want them in the order of `query.vars`, do the remapping here.
-    do_something_with(solution)
-})
 ```
 
 ### How *should* query execution work?
