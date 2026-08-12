@@ -20,8 +20,8 @@
 // implemented interning/deinterning. You can choose which to use by switching which line
 // is uncommented:
 
-// pub use tagged::*;         // tagged representation (strategy 1)
-pub use usize::*;          // usize representation (strategy 2)
+pub use tagged::*;         // tagged representation (strategy 1)
+// pub use usize::*;          // usize representation (strategy 2)
 
 // Once you have reasonable real-world benchmarks, I suggest comparing the performance of
 // (1) and (2). If the performance of (1) is acceptable, use it, because it keeps the code
