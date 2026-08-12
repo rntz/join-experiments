@@ -7,6 +7,8 @@
 # THINGS TO MAYBE DO BEFORE LEAVING.
 
 - move big comment from join.rs into README.md
+- WRITE UP THOUGHTS ON MUTATION into MUTATION.md
+- write up a todo list into README.md
 
 - FDs in the schema, use them in var order picker
 - Query::run() that undoes the var order in final results
