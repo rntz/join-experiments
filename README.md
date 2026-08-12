@@ -68,7 +68,7 @@ TODO
   but to check them less often in query execution.
 
 - Chase FDs in the query. This has the potential to significantly improve performance.
-  This is a more complex operation; see [Chasing FDs](#chasing-fds), below.
+  See [Chasing FDs](#chasing-fds).
 
 - Implement semijoin reduction and GYO. This can improve performance asymptotically on
   some queries. It might be best to do this only if you actually see a performance issue;
