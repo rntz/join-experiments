@@ -35,7 +35,7 @@ cargo run --release --example triangles     # run benchmarks
 
 ## Overview: how does query execution work?
 
-TODO
+Read `src/join.rs`. TODO EXPLAIN
 
 ## Things to do next
 

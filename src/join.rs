@@ -3,8 +3,7 @@ use std::hash::Hash;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::Value;
-use crate::ValueType;
+use crate::value::{Value, ValueType};
 use crate::hash::Map;
 use crate::op::Operator;
 
