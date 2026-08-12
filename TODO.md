@@ -24,9 +24,6 @@
   maintain indexes over updates
   link to "Fixing Incremental Computation", cite the correct figure.
 
-- HOW TO DO A COST BASED QUERY PLANNER
-  how do you estimate the size using the independence assumption?
-
 - explain WCOJs and asymptotics.
 
 # High level goals not started on yet

@@ -1,3 +1,14 @@
+// YOU PROBABLY DON'T NEED TO READ THIS.
+//
+// This is an obsolete prototype that only supported binary relations. This turns out to
+// be a bad idea from an asymptotic performance standpoint. The only reason I can think of
+// to read this file is that it demonstrates two techniques:
+//
+// 1. Per-column tagging.
+//
+// 2. Batching operations so that tag-checking is minimized and operations might get
+// appropriately vectorized.
+
 #![allow(missing_docs)]
 
 // use catlog::zero::column::{Column, Mapping};

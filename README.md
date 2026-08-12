@@ -35,7 +35,41 @@ cargo run --release --example triangles     # run benchmarks
 
 ## Overview: how does query execution work?
 
-Read `src/join.rs`. TODO EXPLAIN
+Read `src/join.rs`. Here's the pipeline for executing a query currently:
+
+1. Make a query.
+2. Pick a variable order on it.
+3. Build indexes on your database using the variable order.
+4. Execute the query against those indexes.
+
+In code (see `examples/basic.rs`):
+
+```rust
+let db = ...; // make a database whose type satisfies `Database`
+let query = Query { ... };
+query.self_check(&db); // check query is well-formed.
+let var_order = query.structural_var_order();
+let plan = query.plan(&var_order);
+let indexes = plan.build_indexes(&db);
+// Get an ExecutableQuery by binding indexes to plan.
+let Some(exec) = plan.bind(&indexes) else {
+  // If a relation involved is empty, binding the plan will fail;
+  // this indicates no query results.
+  return;
+}
+// Iterate over solutions.
+exec.execute_dfs(|solution| {
+    // solution[i] = value for of var_order[i].
+    // If you want them in the order of `query.vars`, do the remapping here.
+    do_something_with(solution)
+})
+```
+
+### How *should* query execution work?
+
+There are some steps we might like to add here:
+
+TODO DESCRIBE
 
 ## Things to do next
 
