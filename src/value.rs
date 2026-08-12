@@ -56,17 +56,19 @@ pub use usize::*;          // usize representation (strategy 2)
 // intern their result.
 //
 // The main problem with interning is freeing things (removing them from the intern
-// table). To do this you need to know when they're not used any more.
+// table). To do this you need to know when they're not used any more. For a static
+// database this is relatively easy: the database gets its own intern table.
 //
-// If the database is static this is relatively easy: the database gets its own intern
-// table. The only wrinkle is that operators that produce an interned type need somewhere
-// to intern it. This result won't outlive the query, so: a query gets a temporary intern
-// table, separate from the database's intern table. Deallocate at query end after
-// un-interning the materialized results.
+// The only wrinkle is that when running a query, operators that produce an interned type
+// need somewhere to intern it. The result won't outlive the query, so: a query gets a
+// temporary intern table, separate from the database's intern table. Deallocate at query
+// end after un-interning the materialized results.
 //
-// If the database changes over time, this is harder: it seems like we need to track how
-// many rows in the database refer to a given interned value, and free it if this count
-// hits zero. This is possible but finnicky.
+// If the database changes over time, however, we must track which interned values are
+// still referred to by some row in the DB. One strategy: from the database schema, we can
+// derive a query for each intern type, then maintain this query incrementally over
+// updates; the diffs in the result of the query tell us what to delete from the intern
+// table.
 
 
 // ==================== TAGGED ENUM (strategy 1) ====================
