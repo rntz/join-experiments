@@ -31,7 +31,7 @@ impl Database for VecDb {
     type Rel = &'static str;
     fn arity(&self, r: &'static str) -> usize { self.rels[r].0 }
     fn count(&self, r: &'static str) -> usize { self.rels[r].1.len() }
-    fn rows(&self, r: &'static str) -> impl Iterator<Item = &[Value]> {
-        self.rels[r].1.iter().map(|row| row.as_slice())
+    fn scan<F: FnMut(&[Value])>(&self, r: &'static str, mut process_row: F) {
+        for row in &self.rels[r].1 { process_row(row) }
     }
 }

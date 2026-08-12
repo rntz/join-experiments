@@ -13,7 +13,6 @@
 - FDs in the schema, use them in var order picker
 - Query::run() that undoes the var order in final results
 - constants in atoms
-- replace rows() by scan()
 - test the variable order picker end-to-end in query execution
 - quarantine the half-finished beam search code.
 

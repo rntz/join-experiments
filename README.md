@@ -52,9 +52,6 @@ Read `src/join.rs`. TODO EXPLAIN
 - Use FD information in the variable order picker: pick determined variables immediately.
   We already do this for operators.
 
-- If desired: eliminate Database::rows() and use Database::scan() instead, which will make
-  it easier to support columnar representation input (as is natural for ACSets).
-
 - Implement mutation & incremental maintenance. See [Mutation](#mutation).
 
 ## Optional, bigger todos

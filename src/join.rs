@@ -68,21 +68,16 @@ use crate::op::Operator;
 pub trait Database {
     // TODO: separate into Schema and Database.
     // Schema should be a struct with arity & FDs for each Rel. Map<Rel, RelInfo>?
-    // Database trait should have count, rows and schema() -> Rc<Schema>.
+    // Database trait should have count, scan and schema() -> Rc<Schema>.
     type Rel: Eq + Hash + Clone; // relation identifier.
     fn arity(&self, r: Self::Rel) -> usize;
     fn count(&self, r: Self::Rel) -> usize;
-    // Producing an external Iterator basically requires a row-oriented representation.
-    fn rows(&self, r: Self::Rel) -> impl Iterator<Item = &[Value]>;
-    // TODO: Instead we should replace all uses of rows() with scan(), which allows any
-    // representation you like:
-    fn scan<F: FnMut(&[Value])>(&self, r: Self::Rel, mut process_row: F) {
-        for row in self.rows(r) { process_row(row) }
-    }
+    // An internal iterator, so any representation (row- or column-oriented) will do.
+    fn scan<F: FnMut(&[Value])>(&self, r: Self::Rel, process_row: F);
     // We could perhaps improve scan() by replacing the row-slice &[Value] with a slice of
     // pointers &[&Value]. This means that if the callback doesn't access a particular
-    // column, it won't even fetch it from memory. However, currently we only call
-    // rows()/scan() once to build indexes, which need all the columns anyways.
+    // column, it won't even fetch it from memory. However, currently we only call scan()
+    // once to build indexes, which need all the columns anyways.
 }
 
 // Var, Rel, Op stand for variable, relation, and computational operator identifiers.
@@ -346,7 +341,7 @@ impl Trie {
         // This interprets filters & level_to_col in the inner loop. Seems to perform well
         // enough on simple benchmarks. If it becomes a problem, redesign to lift as much
         // interpretation as possible out of the loop and see if that fixes it.
-        for row in db.rows(rel) {
+        db.scan(rel, |row| {
             debug_assert!(row.len() == arity, "row arity {} != shape arity {arity}", row.len());
 
             // Apply filters; discard the row on any failure.
@@ -355,7 +350,7 @@ impl Trie {
                 IndexColumnShape::EqColumn(j) => row[*col] == row[*j],
                 IndexColumnShape::TrieLevel(_) => unreachable!("filters holds no TrieLevels"),
             });
-            if !keep { continue }
+            if !keep { return }
             any_row = true;
 
             // Walk the surviving row's path into the trie, materializing intermediate
@@ -372,7 +367,7 @@ impl Trie {
                     Trie::Leaf => unreachable!("only the deepest level holds Leaves"),
                 }
             }
-        }
+        });
 
         if !any_row { None }
         else if n_levels == 0 { Some(Trie::Leaf) }
