@@ -6,7 +6,8 @@
 //
 // 2. INTERNING -- Everything is usize. Intern anything that can't fit in usize.
 //
-// 3. SMART TAGGING -- Tag intelligently, e.g. per-column.
+// 3. SMART TAGGING -- Tag intelligently, e.g. per-column. Exploit this by processing
+// whole batches of data per tag check instead of doing one check per value touched.
 //
 // (1) is simplest but probably slowest.
 //
