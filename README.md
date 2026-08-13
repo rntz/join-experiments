@@ -66,11 +66,8 @@ if let Some(exec) = plan.bind(&indexes) {
 }
 ```
 
-### How *should* query execution work?
-
-There are some steps we might like to add here:
-
-TODO DESCRIBE
+There are a few steps we might like to add here, namely [extending along
+fds](#extending-along-fds) and [semijoin reduction](#semijoin-reduction-and-gyo).
 
 ## Things to do next
 
@@ -86,10 +83,10 @@ TODO DESCRIBE
   where every entity type gets a single relation with a primary key. (I believe this wide
   approach works better than a narrow table-per-morphism approach; eg. for a graph, it
   allows an index to go directly from src to dst vertices without going through the edge
-  id first, which can make queries like finding triangles asymptotically faster. Chasing
-  FDs, as I suggest below, would automatically derive wide from narrow. Note that all of
-  this is orthogonal to how you store the ACSet instance; `Database::scan` can handle
-  that.)
+  id first, which can make queries like finding triangles asymptotically faster. Extending
+  along FDs, as I suggest below, would automatically derive wide from narrow. Note that
+  all of this is orthogonal to how you store the ACSet instance; `Database::scan` can
+  handle that.)
 
 - Use FD information in the variable order picker: pick determined variables immediately.
   We already do this for operators.
@@ -106,8 +103,8 @@ TODO DESCRIBE
   way might be the best approach but would require significant rewriting - not just to use
   fewer tags, but to check them less often in query execution.
 
-- Chase FDs in the query. This has the potential to significantly improve performance.
-  See [Chasing FDs](#chasing-fds).
+- Extend along FDs in the query. This has the potential to significantly improve
+  performance. See [Extending along FDs](#extending-along-fds).
 
 - Implement semijoin reduction and GYO. This can improve performance asymptotically on
   some queries. It might be best to do this only if you actually see a performance issue;
@@ -162,8 +159,8 @@ an optic but for charts instead of lenses:
 
 Here, Input = Database; ΔInput = DatabaseDiff; Output = query results; ΔOutput = diff to
 query results; and State = Indexes. As querying gets more elaborate (e.g. if you implement
-the ideas about chasing FDs or semijoin reductions), it may turn out that you need more
-state than just indexes; but the state-machine pattern will remain.
+the ideas about extending along FDs or semijoin reductions), it may turn out that you need
+more state than just indexes; but the state-machine pattern will remain.
 
 So, how do we derive these delta queries?
 
@@ -257,6 +254,62 @@ Incremental Computation. Good luck! I hope it's easy, but it might be hard.
 [pds]: https://en.wikipedia.org/wiki/Persistent_data_structure
 
 
-## Chasing FDs
+## Extending along FDs
 
-TODO
+Consider the query `G(e1) E(e1,v) G(e2) E(e2,v)`. Here there are three join variables:
+`e1`, `e2`, `v`; different orders on these join variables may produce differing
+performance on different databases. If `G` is very small, picking `e1` (or `e2`) first
+might be sensible; if `G(e1)` holds for almost all `E(e1,v)` then we'd rather choose `v`
+first.
+
+Now suppose that `E(e,v)` has a functional dependency `e` → `v`. Then in principle, fixing
+`e1` or `e2` in this query fixes `v`. Because of this, we can join `G` and `E` together in
+linear time and space (it's a primary-key foreign-key join), extending `G(e)` along `e` →
+`v` to get `G'(e,v) := G(e), E(e,v)`. This reduces our query to `G'(e1,v) G'(e2,v)`, which
+has only one join variable. If we order this join variable first, our query runs in
+asymptotically optimal time, O(size of input + size of output).
+
+However, we only get this benefit if we actually construct `G'(e,v)`. Any variable order
+over the original query, even incorporating the FD, might still be suboptimal on some
+data.
+
+Some notes on generalizing this example:
+
+- If we think ACSet-style of `G(e)` as a table of entities and `E(e,v)` as a table of
+  morphisms, then `G'` is the "wide table" of an entity and all its out-morphisms (or at
+  least, all those mentioned in the query).
+
+- You may need to extend transitively through chains of FDs. Even in the presence of
+  cyclic foreign key relationships, however, this process is bounded by the size of the
+  query.
+
+- Extensions are not worth it if the determined variable that we add is not a join
+  variable.
+
+- After extension, you want to simplify the query by getting rid of relations implied by
+  the extended relations. This is why we get `G'(e1, v) G'(e2,v)` instead of `G'(e1,v)
+  E(e1,v) G'(e2,v) E(e2,v)`.
+
+- You'll need to think about how you identify relations downstream of extending along FDs.
+  Do we require a way to generate fresh relation names? Do we re-use the upstream relation
+  names for the extended downstream relations somehow, using an intermediate derived
+  `Database` implementation? Do we tag relation names with whether they're derived or from
+  the original database? The API will need rethinking.
+
+I'm not sure how standard/novel this "extending along FDs" idea is. The name is my own,
+not standard. Claude pointed me at [a paper by Gottlob, Lee, Valiant & Valiant][GLVV],
+which tightens the AGM bound on the output size of a query (the original worst-case
+optimality bound for query execution) to account for FDs. This sounds similar, but isn't
+exactly the same: in `G(e1) G(e2) E(e1,v) E(e2,v)`, the extended version `G'(e1,v)
+G'(e2,v)` has exactly the same results and so the same output size. Extending along FDs
+didn't improve our *worst-case* execution time; rather it's made our execution time
+*output-sensitive,* so we don't spend O(n^2) time if the actual output size is O(n). I do
+not know of any formal statement of the guarantees this gives us across all possible
+queries.
+
+[GLVV]: https://theory.stanford.edu/~valiant/papers/GLVVfinal.pdf
+
+
+## Semijoin reduction and GYO
+
+TODO EXPLAIN

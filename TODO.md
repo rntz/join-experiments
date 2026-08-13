@@ -40,7 +40,7 @@
 
 # Nice to haves I haven't implemented yet
 
-- chasing FDs
+- extending along FDs
 - semijoins
 
 # TODOs
@@ -48,7 +48,7 @@
 - tagged value alternative in src/value.rs.
 
 - FDs in the schema: figure out how to represent functional dependency info in the
-  Database/Schema trait (e.g. per-relation primary keys), for FD chasing during
+  Database/Schema trait (e.g. per-relation primary keys), for extending along FDs during
   planning/var order picking.
 
 - constants in atoms: decide how to represent constant arguments in Atom (e.g.
