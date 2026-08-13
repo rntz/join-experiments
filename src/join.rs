@@ -7,55 +7,6 @@ use crate::value::{Value, ValueType};
 use crate::hash::Map;
 use crate::op::Operator;
 
-// TODO: bring this comment up to date. place it in README.md.
-//
-// ---------- TO IMPLEMENT ----------
-//
-// 0. Representing & chasing FDs.
-//
-// ---------- STEPS FOR EXECUTING A QUERY ----------
-//
-// 0. Intern all values so everything is usize and equality is equality. This avoids
-//    needing to put tags on things.
-//
-//    Use one hashtable & counter for each entity & attribute type. This can be
-//    incrementally maintained.
-//
-//    Alternatives: tag every single value and dispatch every single time (slow but maybe
-//    not bad enough to matter); or try to be cleverer about tag placement, eg tag every
-//    column and dispatch once per for-loop (probs ok perf but a pain in the ass to do).
-//
-//    Future problems for this approach: computation over interned values. For attribute
-//    values that fit in a usize, this is not a problem. For strings etc, computation
-//    atoms would need the ability to get the value for a given interned id, which is
-//    fine. The real problem is if the computation produces a new value, one that isn't
-//    interned. How do we represent this? We could intern it, but... what if it's only
-//    used temporarily in the query result? Then we've expanded our intern table for no
-//    purpose. I think the best approach is to use a "temporary" intern table that holds
-//    only these intermediate results, but this is kinda complicated :(.
-//
-// 1. CHASING FDS GOES HERE?
-//    I think chasing FDs may be more important than semijoin reduction if I
-//    only have time to do one.
-//
-// 2. SEMIJOIN REDUCTION GOES HERE?
-//
-// 3. Get statistics on it, eg. for each variable, the min across all relations
-//    of the # of values it could have. We can approximate that using the size
-//    of the relation, but can do even better by actually counting distinct
-//    values.
-//
-// 4. Use these stats (& FDs once we have them) to pick a variable order.
-//
-// 5. Build trie indexes on each relation based on the query & var order.
-//    DONE, see Query::plan, QueryPlan::{build_indexes, bind}
-//
-// 6. Execute query using the indexes.
-//    DONE: see ExecutableQuery::execute_dfs
-//    there's also a tentative bfs version in join_bfs.rs.
-//
-// 7. Decode the results by de-interning everything.
-
 
 // ---------- DATABASES AND QUERIES ----------
 // A database is something which has relations and can tabulate them.
