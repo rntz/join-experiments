@@ -152,7 +152,7 @@ So, how do we derive these delta queries?
 
 The standard modern approach to IVM is to assume a ring or group structure -- this is the approach taken by [DBSP][] and its predecessor Differential Dataflow. This assumption is inconvenient for us. An older and simpler alternative is to maintain explicitly against disjoint sets of additions/removals. This has a few disadvantages, but they mostly apply for more complex queries (disjunctive and especially recursive queries).
 
-The best presentation of this approach I've seen is [Fixing Incremental Computation][fic]. This paper purports to be about fixed points, but (a) we do not need fixed points, which is good because (b) I think it is wrong about them; [see this note](/blob/main/note-on-fixing-incremental-computation.md). Read it for the definition of change actions and for section 4 “Derivatives for non-recursive Datalog”, especially fig. 2 (p12), which shows delta query derivation for increasing/decreasing changes.
+The best presentation of this approach I've seen is [Fixing Incremental Computation][fic]. This paper purports to be about fixed points, but (a) we do not need fixed points, which is good because (b) I think it is wrong about them; [see this note](/note-on-fixing-incremental-computation.md). Read it for the definition of change actions and for section 4 “Derivatives for non-recursive Datalog”, especially fig. 2 (p12), which shows delta query derivation for increasing/decreasing changes.
 
 TODO EXPLAIN
 
