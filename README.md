@@ -162,11 +162,11 @@ The standard modern approach to IVM is to assume a ring or group structure -- th
 [DBSP]: https://arxiv.org/abs/2203.16684
 [fic]: https://arxiv.org/abs/1811.06069
 
-The best presentation of this approach I've seen is [Fixing Incremental Computation][fic]. This paper purports to be about fixed points, but (a) we do not need fixed points, which is good because (b) I think it is wrong about them; [see this note](/note-on-fixing-incremental-computation.md). Instead, read the paper for the definition of change actions and for section 4 “Derivatives for non-recursive Datalog”, especially fig. 2 (p12), which shows delta query derivation for increasing/decreasing changes.
+The best presentation of this approach I've seen is [Fixing Incremental Computation][fic] ("FIC"). This paper purports to be about fixed points, but (a) we do not need fixed points, which is good because (b) I think it is wrong about them; [see this note](/note-on-fixing-incremental-computation.md). Instead, read the paper for the definition of change actions and for section 4 “Derivatives for non-recursive Datalog”, especially fig. 2 (p12), which shows delta query derivation for increasing/decreasing changes.
 
-The core idea here is that the change to a conjunctive query is recoverable as a disjunction of conjunctions.
-
-TODO EXPLAIN
+The core idea here is that the change to a conjunctive query is recoverable as a
+disjunction of conjunctions: `Δ(P ∧ Q) = (ΔP ∧ Q) ∨ (P ∧ ΔQ) ∧ (ΔP ∧ ΔQ)`. This only
+applies to increasing changes; the FIC paper shows how to also handle decreasing changes. By applying these rules to your query, you generate a delta query that finds the change. Since the delta query of a conjunctive query can use disjunctions, so you have to choose a strategy for implementing those; see [Factorizing delta queries](#factorizing-delta-queries).
 
 ### Factorizing delta queries
 
