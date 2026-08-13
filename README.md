@@ -9,11 +9,11 @@ hash-based tries; a query plan intersects them one variable at a time, either de
 | File | Contents |
 |------|----------|
 | `src/lib.rs` | Crate root: module wiring and re-exports. |
-| `src/value.rs` | The `Value` type that everything joins over. |
-| `src/join.rs` | Core engine: databases, queries, tries, query plans, query execution. Many design comments. |
+| `src/value.rs` | Representation of values in the database. Two options, as submodules: tagged values, or uniform usize (requires interning). |
+| `src/join.rs` | Core engine: databases, queries, tries, query plans, query execution. |
 | `src/var_order.rs` | Variable order picker. |
 | `src/op.rs` | Computational operators trait & implementations (eg. addition, ≤). |
-| `src/join_bfs.rs` | Breadth-first query execution prototype. Disposable. |
+| `src/join_bfs.rs` | Breadth-first query execution prototype. Feel free to delete this; some tests that refer to it will need updating. |
 | `src/hash.rs` | `FxHasher` (fast non-cryptographic hash). Edit the `HashBuilder` definition in this file to switch from FxHash to Rust's default SipHash. |
 | `src/vec_db.rs` | Trivial vector-based `Database` used by tests & benchmarks. |
 | `src/graph.rs` | SNAP dataset loading and reference triangle finders using binary joins. |
@@ -73,20 +73,21 @@ TODO DESCRIBE
 ## Things to do next
 
 - Support constants in atoms. The trie indexing machinery for this is already present.
-  This will need changes to `Atom`, `index_shape`, and `Query::plan`, as well as to how
-  operators are handled in `ExecutableQuery::execute_dfs` if they have constant arguments.
+  This will need changes to at least `Atom`, `index_shape`, `Query::plan`, and
+  `QueryDfsState::gather`.
 
 - Split Schema out of the Database trait. Schema can probably just be a struct that maps
   relation ids to info about them (arity, FDs).
 
 - Support FD information. The simplest approach: each relation in a Schema gets an
-  optional primary key. This matches well with ACSets under a "wide table" encoding where
-  every entity type gets a single relation with a primary key. (I believe this wide
-  encoding works better than a narrow table-per-morphism approach; eg. for a graph, it
+  optional primary key. This matches well with ACSets under a "wide table" presentation
+  where every entity type gets a single relation with a primary key. (I believe this wide
+  approach works better than a narrow table-per-morphism approach; eg. for a graph, it
   allows an index to go directly from src to dst vertices without going through the edge
   id first, which can make queries like finding triangles asymptotically faster. Chasing
-  FDs, as I suggest below, would automatically derive this "wide" representation from a
-  "narrow" representation.)
+  FDs, as I suggest below, would automatically derive wide from a narrow. Note that all of
+  this is orthogonal to how you store the ACSet instance; `Database::scan` can handle
+  that.)
 
 - Use FD information in the variable order picker: pick determined variables immediately.
   We already do this for operators.
@@ -136,12 +137,18 @@ trait DatabaseDiff {
 }
 ```
 
-We then wish to translate a `DatabaseDiff` into a diff to the results of the query. To do this, we need a few ingredients:
+We then wish to translate a `DatabaseDiff` into a diff to the results of the query. To do
+this, we need a few ingredients:
 
-1. We need to derive & perform delta queries. A delta query computes the diff to a query's results given the diff to the database. There is a standard literature on these.
-2. These delta queries will need indexes. These indexes may not be the same as those needed by the original query execution step.
-3. Therefore, we should derive and plan these delta queries when we plan the original query, so that we know the indexes they need and can build them for the original, unmodified database.
-4. We must update these indexes using the database diff so we can use them the next time the database changes.
+1. We need to derive & perform delta queries. A delta query computes the diff to a query's
+   results given the diff to the database. There is a standard literature on these.
+2. These delta queries will need indexes. These indexes may not be the same as those
+   needed by the original query execution step.
+3. Therefore, we should derive and plan these delta queries when we plan the original
+   query, so that we know the indexes they need and can build them for the original,
+   unmodified database.
+4. We must update these indexes using the database diff so we can use them the next time
+   the database changes.
 
 The indexes act as intermediate state passed between the original query execution and the
 incremental maintenance passes. You can think of the whole system as a (not necessarily
@@ -151,22 +158,38 @@ an optic but for charts instead of lenses:
     initial pass: Input          → State × Output
     update pass:  State × ΔInput → State × ΔOutput
 
-Here, Input = Database; ΔInput = DatabaseDiff; Output = query results; ΔOutput = diff to query results; and State = Indexes. As querying gets more elaborate (e.g. if you implement the ideas about chasing FDs or semijoin reductions), it may turn out that you need more state than just indexes; but the state-machine pattern will remain.
+Here, Input = Database; ΔInput = DatabaseDiff; Output = query results; ΔOutput = diff to
+query results; and State = Indexes. As querying gets more elaborate (e.g. if you implement
+the ideas about chasing FDs or semijoin reductions), it may turn out that you need more
+state than just indexes; but the state-machine pattern will remain.
 
 So, how do we derive these delta queries?
 
 ### Delta queries
 
-The standard modern approach to IVM is to assume a ring or group structure -- this is the approach taken by [DBSP][] and its predecessor Differential Dataflow. This assumption is inconvenient for us. An older and simpler alternative is to maintain explicitly against disjoint sets of additions/removals. This has a few disadvantages, but they mostly apply for more complex queries (disjunctive and especially recursive queries).
+The standard modern approach to IVM is to assume a ring or group structure -- this is the
+approach taken by [DBSP][] and its predecessor Differential Dataflow. This assumption is
+inconvenient for us. An older and simpler alternative is to maintain explicitly against
+disjoint sets of additions/removals. This has a few disadvantages, but they mostly apply
+for more complex queries (disjunctive and especially recursive queries).
 
 [DBSP]: https://arxiv.org/abs/2203.16684
 [fic]: https://arxiv.org/abs/1811.06069
 
-The best presentation of this approach I've seen is [Fixing Incremental Computation][fic] ("FIC"). This paper purports to be about fixed points, but (a) we do not need fixed points, which is good because (b) I think it is wrong about them; [see this note](/note-on-fixing-incremental-computation.md). Instead, read the paper for the definition of change actions and for section 4 “Derivatives for non-recursive Datalog”, especially fig. 2 (p12), which shows delta query derivation for increasing/decreasing changes.
+The best presentation of this approach I've seen is [Fixing Incremental Computation][fic]
+("FIC"). This paper purports to be about fixed points, but (a) we do not need fixed
+points, which is good because (b) I think it is wrong about them; [see this
+note](/note-on-fixing-incremental-computation.md). Instead, read the paper for the
+definition of change actions and for section 4 “Derivatives for non-recursive Datalog”,
+especially fig. 2 (p12), which shows delta query derivation for increasing/decreasing
+changes.
 
 The core idea here is that the change to a conjunctive query is recoverable as a
-disjunction of conjunctions: `Δ(P ∧ Q) = (ΔP ∧ Q) ∨ (P ∧ ΔQ) ∧ (ΔP ∧ ΔQ)`. This only
-applies to increasing changes; the FIC paper shows how to also handle decreasing changes. By applying these rules to your query, you generate a delta query that finds the change. Since the delta query of a conjunctive query can use disjunctions, so you have to choose a strategy for implementing those; see [Factorizing delta queries](#factorizing-delta-queries).
+disjunction of conjunctions: `Δ(P ∧ Q) = (ΔP ∧ Q) ∨ (P ∧ ΔQ) ∨ (ΔP ∧ ΔQ)`. This only
+applies to increasing changes; the FIC paper shows how to also handle decreasing changes.
+By applying these rules to your query, you generate a delta query that finds the change.
+Since the delta of a conjunctive query can have disjunctions, we need a strategy for
+disjunction; see [Factorizing delta queries](#factorizing-delta-queries).
 
 ### Factorizing delta queries
 
