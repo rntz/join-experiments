@@ -110,6 +110,50 @@ TODO DESCRIBE
 
 This is probably the most important thing I didn't get to.
 
+As I see it, mutation is not really a data structures problem; it's an incremental view
+maintenance problem. The query engine doesn't really care how the Database is implemented;
+the first thing it does is build its own indexes on it, and then exclusively uses those in
+query execution. The only thing we need is `Database::scan`: a way to read out the
+contents of the database in time proportional to its size.
+
+Similarly, to handle mutation, you need to be able to tell the query what changed (the
+diff) in time proportional to the size of the diff. The simplest way to communicate this
+is to say, for every relation in the query, what got added and what got removed. Something
+in the vein of:
+
+```rust
+trait DatabaseDiff {
+    type Rel: Eq + Hash + Clone;
+    // Invariant: insertions/deletions are disjoint. We may also wish to insist they are
+    // minimal, i.e. we don't insert existing rows or delete non-existent rows.
+    fn scan_inserts<F: FnMut(&[Value])>(&self, r: Self::Rel, callback: F);
+    fn scan_deletes<F: FnMut(&[Value])>(&self, r: Self::Rel, callback: F);
+}
+```
+
+We then wish to translate a `DatabaseDiff` into a diff to the results of the query. To do this, we need a few ingredients:
+
+1. We need to derive & perform delta queries. A delta query computes the diff to a query's results given the diff to the database. There is a standard literature on these.
+2. These delta queries will need indexes. These indexes may not be the same as those needed by the original query execution step.
+3. Therefore, we should derive and plan these delta queries when we plan the original query, so that we know the indexes they need and can build them for the original, unmodified database.
+4. We need to update these indexes using the database diff.
+
+The indexes act as intermediate state passed between the original query execution and the
+incremental maintenance passes. You can think of the whole system as a (not necessarily
+finite) state machine, specifically a deterministic transducer, like a Moore or Mealy
+machine, or an optic but for charts instead of lenses:
+
+    initial pass: Input          → State × Output
+    update pass:  State × ΔInput → State × ΔOutput
+
+Here, Input = Database; ΔInput = DatabaseDiff; Output = query results; ΔOutput = diff to query results; and State = Indexes. As querying gets more elaborate (e.g. if you implement the ideas about chasing FDs or semijoin reductions), it may turn out that you need more State than just indexes; but the state-machine pattern will remain.
+
+So, how do we compute these delta queries?
+
+### Delta queries
+
+TODO
+
 ## Chasing FDs
 
 TODO
