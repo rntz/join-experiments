@@ -10,10 +10,10 @@ hash-based tries; a query plan intersects them one variable at a time, either de
 |------|----------|
 | `src/lib.rs` | Crate root: module wiring and re-exports. |
 | `src/value.rs` | Representation of values in the database. Two options, as submodules: tagged values, or uniform usize (requires interning). |
-| `src/join.rs` | Core engine: databases, queries, tries, query plans, query execution. |
+| `src/join.rs` | Core engine: databases, queries, tries, query plans, query execution. Many design comments. |
 | `src/var_order.rs` | Variable order picker. |
 | `src/op.rs` | Computational operators trait & implementations (eg. addition, ≤). |
-| `src/join_bfs.rs` | Breadth-first query execution prototype. Feel free to delete this; some tests that refer to it will need updating. |
+| `src/join_bfs.rs` | Breadth-first query execution prototype. Feel free to delete this; tests/benchmarks that refer to it will need updating. |
 | `src/hash.rs` | `FxHasher` (fast non-cryptographic hash). Edit the `HashBuilder` definition in this file to switch from FxHash to Rust's default SipHash. |
 | `src/vec_db.rs` | Trivial vector-based `Database` used by tests & benchmarks. |
 | `src/graph.rs` | SNAP dataset loading and reference triangle finders using binary joins. |
@@ -85,7 +85,7 @@ TODO DESCRIBE
   approach works better than a narrow table-per-morphism approach; eg. for a graph, it
   allows an index to go directly from src to dst vertices without going through the edge
   id first, which can make queries like finding triangles asymptotically faster. Chasing
-  FDs, as I suggest below, would automatically derive wide from a narrow. Note that all of
+  FDs, as I suggest below, would automatically derive wide from narrow. Note that all of
   this is orthogonal to how you store the ACSet instance; `Database::scan` can handle
   that.)
 
