@@ -152,12 +152,73 @@ So, how do we derive these delta queries?
 
 The standard modern approach to IVM is to assume a ring or group structure -- this is the approach taken by [DBSP][] and its predecessor Differential Dataflow. This assumption is inconvenient for us. An older and simpler alternative is to maintain explicitly against disjoint sets of additions/removals. This has a few disadvantages, but they mostly apply for more complex queries (disjunctive and especially recursive queries).
 
-The best presentation of this approach I've seen is [Fixing Incremental Computation][fic]. This paper purports to be about fixed points, but (a) we do not need fixed points, which is good because (b) I think it is wrong about them; [see this note](/note-on-fixing-incremental-computation.md). Read it for the definition of change actions and for section 4 “Derivatives for non-recursive Datalog”, especially fig. 2 (p12), which shows delta query derivation for increasing/decreasing changes.
-
-TODO EXPLAIN
-
 [DBSP]: https://arxiv.org/abs/2203.16684
 [fic]: https://arxiv.org/abs/1811.06069
+
+The best presentation of this approach I've seen is [Fixing Incremental Computation][fic]. This paper purports to be about fixed points, but (a) we do not need fixed points, which is good because (b) I think it is wrong about them; [see this note](/note-on-fixing-incremental-computation.md). Instead, read the paper for the definition of change actions and for section 4 “Derivatives for non-recursive Datalog”, especially fig. 2 (p12), which shows delta query derivation for increasing/decreasing changes.
+
+The core idea here is that the change to a conjunctive query is recoverable as a disjunction of conjunctions.
+
+### Factorizing delta queries
+
+Consider the query
+
+    Q(x,y,z) = E(x,y), E(y,z), E(x,z), x + y = z
+
+Of these, only the `E` relation is capable of changing; the `+` relation is fixed. If we
+assume only increasing changes, let `E` be the set of old tuples and `ΔE` be the set of
+added tuples, the new tuples in `Q` are:
+
+    ΔQ(x,y,z) =    (ΔE(x,y), ΔE(y,z), ΔE(x,z), x + y = z)
+                or (ΔE(x,y), ΔE(y,z),  E(x,z), x + y = z)
+                or (ΔE(x,y),  E(y,z), ΔE(x,z), x + y = z)
+                or (ΔE(x,y),  E(y,z),  E(x,z), x + y = z)
+                or ( E(x,y), ΔE(y,z), ΔE(x,z), x + y = z)
+                or ( E(x,y), ΔE(y,z),  E(x,z), x + y = z)
+                or ( E(x,y),  E(y,z), ΔE(x,z), x + y = z)
+
+As you can see, we get 2³-1 combinations of ΔE and E involving at least one ΔE. However, 2ⁿ-1 is rather large; there's a much less combinatorially explosive way of factoring this. Let `τE = E ∪ ΔE`. Then:
+
+    ΔQ(x,y,z) =    (ΔE(x,y),  E(y,z),  E(x,z), x + y = z)
+                or (τE(x,y), ΔE(y,z),  E(x,z), x + y = z)
+                or (τE(x,y), τE(y,z), ΔE(x,z), x + y = z)
+
+Now we get only n cases, for n = the number of atoms that can change. Much better!
+However, it requires a redundancy in our data representation: we simultaneously need
+appropriate indexes on the old data `E` and the updated `τE`. This seems to require copying
+the indexes for `E` instead of modifying them in place. This copying takes time
+proportional to the size of `E`. This is problematic: we want delta maintenance to do work
+proportional to the size of delta when possible; it is unacceptable for it to always take
+time linear in the size of the database! There are a few options here:
+
+1. Accept the more combinatorially explosive full-delta enumeration. I worry about this:
+   10 atoms yields ~1,000 cases; 20 atoms, ~1 million cases; 30 atoms, ~1 billion. 1
+   billion is definitely too many. If you do this long-term, make sure you plumb the error
+   through to the user in a visible way.
+
+2. Use an index data structure that can be updated [persistently][pds]. For instance,
+   replace the hash tables in the trie nodes with balanced trees that support O(log n)
+   insertion/removal while preserving the existing version. Because this results in
+   structural sharing between the old & new tries, you'd need to use ref-counted `Rc<>`
+   pointers to refer to subtries. In fact, the poor man's version of this is to *just* put
+   `Rc<>` pointers on subtries and trie to preserve subtries that aren't modified, but
+   copy hashtables willy-nilly. This might be good enough for a prototype.
+
+3. Allow (disjoint) unions in query plans and make `execute_dfs` smarter. I think this is
+   quite doable. Instead of each level being a vector of intersected atoms, it'd be an
+   intersection-vector of union-vectors of atoms. Then `τE(x,z)` gets represented directly
+   as `E(x,z) ∪ ΔE(x,z)`.
+
+   Fundamentally, the operations we need are count(), propose(), and filter(). To count a
+   union, sum the counts of its members (the count is actually representing work, not
+   element count, so even if they're not disjoint, this is correct). To propose, propose
+   everything from both (here you want to dedup if they're not disjoint). To filter, check
+   if either accepts. Managing the trie state gets tricky but not impossible.
+
+I think (2) or (3) are ideal but (1) might be good enough to get started and the poor
+man's version of (2) is very doable and might be fast enough.
+
+[pds]: https://en.wikipedia.org/wiki/Persistent_data_structure
 
 
 ## Chasing FDs
