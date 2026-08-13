@@ -111,15 +111,13 @@ TODO DESCRIBE
 This is probably the most important thing I didn't get to.
 
 As I see it, mutation is not really a data structures problem; it's an incremental view
-maintenance problem. The query engine doesn't really care how the Database is implemented;
-the first thing it does is build its own indexes on it, and then exclusively uses those in
-query execution. The only thing we need is `Database::scan`: a way to read out the
-contents of the database in time proportional to its size.
+maintenance problem. The query engine doesn't care how the Database stores data; the first
+thing it does is build its own indexes, and query execution exclusively uses those. We
+only need a way to read the contents of the database (`Database::scan`).
 
-Similarly, to handle mutation, you need to be able to tell the query what changed (the
-diff) in time proportional to the size of the diff. The simplest way to communicate this
-is to say, for every relation in the query, what got added and what got removed. Something
-in the vein of:
+Similarly, to handle mutation, we need to know what changed (the diff). The simplest way
+to do this is to say, for every relation in the query, what got added and what got
+removed. Something like:
 
 ```rust
 trait DatabaseDiff {
@@ -146,9 +144,9 @@ machine, or an optic but for charts instead of lenses:
     initial pass: Input          → State × Output
     update pass:  State × ΔInput → State × ΔOutput
 
-Here, Input = Database; ΔInput = DatabaseDiff; Output = query results; ΔOutput = diff to query results; and State = Indexes. As querying gets more elaborate (e.g. if you implement the ideas about chasing FDs or semijoin reductions), it may turn out that you need more State than just indexes; but the state-machine pattern will remain.
+Here, Input = Database; ΔInput = DatabaseDiff; Output = query results; ΔOutput = diff to query results; and State = Indexes. As querying gets more elaborate (e.g. if you implement the ideas about chasing FDs or semijoin reductions), it may turn out that you need more state than just indexes; but the state-machine pattern will remain.
 
-So, how do we compute these delta queries?
+So, how do we derive these delta queries?
 
 ### Delta queries
 
