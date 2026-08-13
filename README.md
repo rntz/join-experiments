@@ -206,19 +206,18 @@ time linear in the size of the database! There are a few options here:
    `Rc<>` pointers on subtries and trie to preserve subtries that aren't modified, but
    copy hashtables willy-nilly. This might be good enough for a prototype.
 
-3. Allow (disjoint) unions in query plans and make `execute_dfs` smarter. I think this is
-   quite doable. Instead of each level being a vector of intersected atoms, it'd be an
-   intersection-vector of union-vectors of atoms. Then `τE(x,z)` gets represented directly
-   as `E(x,z) ∪ ΔE(x,z)`.
+3. Allow (disjoint) unions in query plans and make `execute_dfs` smarter. Instead of each
+   level being a vector of intersected atoms, it'd be a vector of vectors: an intersection
+   of unions. Then `τE(x,z)` gets represented directly as `E(x,z) ∪ ΔE(x,z)`.
 
-   Fundamentally, the operations we need are count(), propose(), and filter(). To count a
-   union, sum the counts of its members (the count is actually representing work, not
-   element count, so even if they're not disjoint, this is correct). To propose, propose
-   everything from both (here you want to dedup if they're not disjoint). To filter, check
-   if either accepts. Managing the trie state gets tricky but not impossible.
+   The operations we need are count(), propose(), and filter(). To count a union, sum the
+   counts of its members (the count is actually representing work, not element count, so
+   even if they're not disjoint, this is correct). To propose, propose everything from
+   both (here you want to dedup if they're not disjoint). To filter, check if either
+   accepts. Managing the trie state gets tricky but not impossible.
 
 I think (2) or (3) are ideal but (1) might be good enough to get started and the poor
-man's version of (2) is very doable and might be fast enough.
+man's version of (2) is quite easy and might be fast enough.
 
 [pds]: https://en.wikipedia.org/wiki/Persistent_data_structure
 
