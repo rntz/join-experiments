@@ -213,7 +213,7 @@ time linear in the size of the database! There are a few options here:
    `Rc<>` pointers on subtries and trie to preserve subtries that aren't modified, but
    copy hashtables willy-nilly. This might be good enough for a prototype.
 
-3. Allow (disjoint) unions in query plans and make `execute_dfs` smarter. Instead of each
+3. Allow (disjoint?) unions in query plans and make `execute_dfs` smarter. Instead of each
    level being a vector of intersected atoms, it'd be a vector of vectors: an intersection
    of unions. Then `τE(x,z)` gets represented directly as `E(x,z) ∪ ΔE(x,z)`.
 
