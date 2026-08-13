@@ -190,6 +190,15 @@ By applying these rules to your query, you generate a delta query that finds the
 Since the delta of a conjunctive query can have disjunctions, we need a strategy for
 disjunction; see [Factorizing delta queries](#factorizing-delta-queries).
 
+You'll need to plan these delta queries once (probably when you get the original query)
+rather than re-plan them on every update, because you can't afford to build new indexes
+over the existing data on every update. Note that *the current structural variable order
+picker may yield poor results on delta queries!* Instead, the picker should assume the
+delta relations are *small* and so prioritize picking variables from the delta relations
+first. If the delta relations are not small, e.g. ~on the order of the size of the
+original data, re-execution from scratch followed by diffing may be faster than delta
+query execution.
+
 ### Factorizing delta queries
 
 Consider the query
@@ -220,13 +229,33 @@ appropriate indexes on the old data `E` and the updated `τE`. This seems to req
 the indexes for `E` instead of modifying them in place. This copying takes time
 proportional to the size of `E`. This is problematic: we want delta maintenance to do work
 proportional to the size of delta when possible; it is unacceptable for it to always take
-time linear in the size of the database! There are a few options here:
+time linear in the size of the database!
+
+Fortunately, there are many options here:
 
 1. Use the 2ⁿ-1 approach. I worry about this: 10 atoms yields ~1,000 cases (fine?); 20
    atoms, ~1 million (worrying); 30 atoms, ~1 billion (too big!). If you do this
    long-term, make sure you plumb the error through to the user in a visible way.
 
-2. Use an index data structure that can be updated [persistently][pds]. For instance,
+2. Just keep two copies of each index. Update one before delta querying, the other after.
+
+3. Interleave execution of the delta query cases with index updating. For instance:
+
+        1) ΔR(x,y)  S(y,z)  T(x,z)
+        2) τR(x,y) ΔS(y,z)  T(x,z)
+        3) τR(x,y) τS(y,z) ΔT(x,z)
+
+   In this case, we can execute (1), then update R to τR, then execute (2), then update S
+   to τS, then execute (3), then update T to τT. No case requires both the updated τR and
+   R simultaneously. However, if two distinct atoms share an index, then we cannot do
+   this. In this case we fall back on (5) and keep two copies of this index.
+
+4. Put timestamps on every row. Every update gets a new timestamp; every case of the delta
+   query uses the timestamps to access either all data or only old data as necessary. You
+   probably want to keep the delta itself separate to exploit the fact that it's
+   (hopefully) much smaller than either the old or updated relation.
+
+5. Use an index data structure that can be updated [persistently][pds]. For instance,
    replace the hash tables in the trie nodes with balanced trees that support O(log n)
    insertion/removal while preserving the existing version. Because this results in
    structural sharing between the old & new tries, you'd need to use ref-counted `Rc<>`
@@ -234,7 +263,7 @@ time linear in the size of the database! There are a few options here:
    `Rc<>` pointers on subtries and trie to preserve subtries that aren't modified, but
    copy hashtables willy-nilly. This might be good enough for a prototype.
 
-3. Allow (disjoint?) unions in query plans and make `execute_dfs` smarter. Instead of each
+6. Allow (disjoint?) unions in query plans and make `execute_dfs` smarter. Instead of each
    level being an intersection of atoms, it'd be a intersection of unions of atoms. Then `τE(x,z)`
    gets represented directly as `E(x,z) ∪ ΔE(x,z)`.
 
@@ -244,8 +273,8 @@ time linear in the size of the database! There are a few options here:
    (here you want to dedup if they're not disjoint). To filter, check if either accepts.
    Managing the trie state gets tricky but not impossible.
 
-I think (2) or (3) are ideal but (1) might be good enough to get started. The poor
-man's version of (2) is quite easy and might be fast enough for a while.
+(1) or (2) are easy enough to get off the ground. All of the others seem reasonable
+long-term; I'd try (3) first.
 
 Of course, an unsolved problem here is combining this factorization, which is based on
 only increasing changes, with the increasing/decreasing changes formulae from Fixing
