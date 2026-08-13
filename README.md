@@ -159,6 +159,8 @@ The best presentation of this approach I've seen is [Fixing Incremental Computat
 
 The core idea here is that the change to a conjunctive query is recoverable as a disjunction of conjunctions.
 
+TODO EXPLAIN
+
 ### Factorizing delta queries
 
 Consider the query
