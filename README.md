@@ -256,18 +256,18 @@ Incremental Computation. Good luck! I hope it's easy, but it might be hard.
 
 ## Extending along FDs
 
-Consider the query `G(e1) E(e1,v) G(e2) E(e2,v)`. Here there are three join variables:
+Consider the query `G(e1) G(e2) E(e1,v) E(e2,v)`. Here there are three join variables:
 `e1`, `e2`, `v`; different orders on these join variables may produce differing
-performance on different databases. If `G` is very small, picking `e1` (or `e2`) first
+performance on different databases. If `G` is very small, picking `e1` or `e2` first
 might be sensible; if `G(e1)` holds for almost all `E(e1,v)` then we'd rather choose `v`
 first.
 
-Now suppose that `E(e,v)` has a functional dependency `e` → `v`. Then in principle, fixing
-`e1` or `e2` in this query fixes `v`. Because of this, we can join `G` and `E` together in
-linear time and space (it's a primary-key foreign-key join), extending `G(e)` along `e` →
-`v` to get `G'(e,v) := G(e), E(e,v)`. This reduces our query to `G'(e1,v) G'(e2,v)`, which
-has only one join variable. If we order this join variable first, our query runs in
-asymptotically optimal time, O(size of input + size of output).
+Now suppose `E(e,v)` has a functional dependency `e` → `v`. Then fixing `e1` or `e2` in
+this query fixes `v`. Because of this, we can join `G` and `E` together in linear time and
+space (it's a primary-key foreign-key join), extending `G(e)` along `e` → `v` to get
+`G'(e,v) := G(e), E(e,v)`. This reduces our query to `G'(e1,v) G'(e2,v)`, which has only
+one join variable. If we order this join variable first, our query runs in asymptotically
+optimal time, O(size of input + size of output).
 
 However, we only get this benefit if we actually construct `G'(e,v)`. Any variable order
 over the original query, even incorporating the FD, might still be suboptimal on some
@@ -302,8 +302,8 @@ which tightens the AGM bound on the output size of a query (the original worst-c
 optimality bound for query execution) to account for FDs. This sounds similar, but isn't
 exactly the same: in `G(e1) G(e2) E(e1,v) E(e2,v)`, the extended version `G'(e1,v)
 G'(e2,v)` has exactly the same results and so the same output size. Extending along FDs
-didn't improve our *worst-case* execution time; rather it's made our execution time
-*output-sensitive,* so we don't spend O(n^2) time if the actual output size is O(n). I do
+didn't improve our worst-case execution time; rather it's made our execution time
+output-sensitive, so we don't spend O(n^2) time if the actual output size is O(n). I do
 not know of any formal statement of the guarantees this gives us across all possible
 queries.
 
