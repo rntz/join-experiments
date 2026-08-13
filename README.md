@@ -248,7 +248,7 @@ Fortunately, there are many options here:
    In this case, we can execute (1), then update R to τR, then execute (2), then update S
    to τS, then execute (3), then update T to τT. No case requires both the updated τR and
    R simultaneously. However, if two distinct atoms share an index, then we cannot do
-   this. In this case we fall back on (5) and keep two copies of this index.
+   this. In this case we fall back on (2) and keep two copies of this index.
 
 4. Put timestamps on every row. Every update gets a new timestamp; every case of the delta
    query uses the timestamps to access either all data or only old data as necessary. You
