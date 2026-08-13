@@ -9,21 +9,23 @@ hash-based tries; a query plan intersects them one variable at a time, either de
 | File | Contents |
 |------|----------|
 | `src/lib.rs` | Crate root: module wiring and re-exports. |
-| `src/value.rs` | Representation of values in the database. Two options, as submodules: tagged values, or uniform usize (requires interning). |
 | `src/join.rs` | Core engine: databases, queries, tries, query plans, query execution. Many design comments. |
+| `src/value.rs` | Representation of values in the database. Two options, as submodules: tagged values, or uniform usize (requires interning). |
 | `src/var_order.rs` | Variable order picker. |
 | `src/op.rs` | Computational operators trait & implementations (eg. addition, ≤). |
 | `src/join_bfs.rs` | Breadth-first query execution prototype. Feel free to delete this; tests/benchmarks that refer to it will need updating. |
 | `src/hash.rs` | `FxHasher` (fast non-cryptographic hash). Edit the `HashBuilder` definition in this file to switch from FxHash to Rust's default SipHash. |
 | `src/vec_db.rs` | Trivial vector-based `Database` used by tests & benchmarks. |
-| `src/graph.rs` | SNAP dataset loading and reference triangle finders using binary joins. |
+| `src/graph.rs` | [SNAP][] dataset loading and reference triangle finders using binary joins. |
 | `tests/queries.rs` | Simple query correctness tests on tiny data. |
 | `tests/self_check.rs` | Tests for `Query::{ground_vars, self_check}` (query well-formedness). |
 | `tests/var_order.rs` | Tests for `Query::structural_var_order`. |
 | `examples/basic.rs` | Basic example of running a query. |
 | `examples/triangles.rs` | Triangle-counting benchmark over SNAP graphs. |
 | `examples/join-v1.rs` | Earlier standalone prototype; superseded by the library. |
-| `download_snap_datasets.sh` | Fetches SNAP graph datasets into `data/`. |
+| `download_snap_datasets.sh` | Fetches [SNAP][] graph datasets into `data/`. |
+
+[SNAP]: https://snap.stanford.edu/data/
 
 ## Usage
 
@@ -223,10 +225,9 @@ proportional to the size of `E`. This is problematic: we want delta maintenance 
 proportional to the size of delta when possible; it is unacceptable for it to always take
 time linear in the size of the database! There are a few options here:
 
-1. Accept the more combinatorially explosive full-delta enumeration. I worry about this:
-   10 atoms yields ~1,000 cases; 20 atoms, ~1 million cases; 30 atoms, ~1 billion. 1
-   billion is definitely too many. If you do this long-term, make sure you plumb the error
-   through to the user in a visible way.
+1. Use the 2ⁿ-1 approach. I worry about this: 10 atoms yields ~1,000 cases (fine?); 20
+   atoms, ~1 million (worrying); 30 atoms, ~1 billion (too big!). If you do this
+   long-term, make sure you plumb the error through to the user in a visible way.
 
 2. Use an index data structure that can be updated [persistently][pds]. For instance,
    replace the hash tables in the trie nodes with balanced trees that support O(log n)
@@ -237,8 +238,8 @@ time linear in the size of the database! There are a few options here:
    copy hashtables willy-nilly. This might be good enough for a prototype.
 
 3. Allow (disjoint?) unions in query plans and make `execute_dfs` smarter. Instead of each
-   level being a vector of intersected atoms, it'd be a vector of vectors: an intersection
-   of unions. Then `τE(x,z)` gets represented directly as `E(x,z) ∪ ΔE(x,z)`.
+   level being an intersection of atoms, it'd be a intersection of unions of atoms. Then `τE(x,z)`
+   gets represented directly as `E(x,z) ∪ ΔE(x,z)`.
 
    The operations we need are count(), propose(), and filter(). To count a union, sum the
    counts of its members (if they're not disjoint this is an upper bound, but that's fine,
