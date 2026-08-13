@@ -218,10 +218,10 @@ time linear in the size of the database! There are a few options here:
    of unions. Then `τE(x,z)` gets represented directly as `E(x,z) ∪ ΔE(x,z)`.
 
    The operations we need are count(), propose(), and filter(). To count a union, sum the
-   counts of its members (the count is actually representing work, not element count, so
-   even if they're not disjoint, this is correct). To propose, propose everything from
-   both (here you want to dedup if they're not disjoint). To filter, check if either
-   accepts. Managing the trie state gets tricky but not impossible.
+   counts of its members (if they're not disjoint this is an upper bound, but that's fine,
+   and it's the best we can do in constant time). To propose, propose everything from both
+   (here you want to dedup if they're not disjoint). To filter, check if either accepts.
+   Managing the trie state gets tricky but not impossible.
 
 I think (2) or (3) are ideal but (1) might be good enough to get started. The poor
 man's version of (2) is quite easy and might be fast enough for a while.
