@@ -134,7 +134,7 @@ We then wish to translate a `DatabaseDiff` into a diff to the results of the que
 1. We need to derive & perform delta queries. A delta query computes the diff to a query's results given the diff to the database. There is a standard literature on these.
 2. These delta queries will need indexes. These indexes may not be the same as those needed by the original query execution step.
 3. Therefore, we should derive and plan these delta queries when we plan the original query, so that we know the indexes they need and can build them for the original, unmodified database.
-4. We need to update these indexes using the database diff.
+4. We must update these indexes using the database diff so we can use them the next time the database changes.
 
 The indexes act as intermediate state passed between the original query execution and the
 incremental maintenance passes. You can think of the whole system as a (not necessarily
@@ -150,7 +150,17 @@ So, how do we derive these delta queries?
 
 ### Delta queries
 
-TODO
+The standard modern approach to IVM is to assume a ring or group structure -- this is the approach taken by [DBSP][] and its predecessor Differential Dataflow. This assumption is inconvenient for us. An older and simpler alternative is to maintain explicitly against disjoint sets of additions/removals. This has a few disadvantages, but they mostly apply for more complex queries (disjunctive and especially recursive queries).
+
+The best presentation of this approach I've seen is [Fixing Incremental Computation][fic]. This paper purports to be about fixed points, but (a) we do not need fixed points, which is good because (b) it is wrong about them; I explain below [1]. Read it for the definition of change actions and for section 4 “Derivatives for non-recursive Datalog”, especially fig. 2 (p12), which shows delta query derivation for increasing/decreasing changes.
+
+TODO EXPLAIN
+
+[DBSP]: https://arxiv.org/abs/2203.16684
+[fic]: https://arxiv.org/abs/1811.06069
+
+[1] The paper’s approach to derivatives of fixed points (theorem 43) is correct, but I do not think it is actually incremental; I suspect that it amounts to re-evaluation from scratch, although I’m not 100% sure. The reason is that it computes a least fixed point over changes, iteratively starting at the “least change” – but what is the least change? Well, a change is a pair of (added, removed) sets, and they are ordered so as to make their action on sets monotone, so the least change is in fact (∅, Ω) where Ω is the universe. This is awkward, since this may not be finite. Even ignoring that, conceptually, it represents ‘deleting everything’; and I suspect without proof that if you work out what the fixed point computation does, it amounts to deleting everything and rederiving from scratch. I believe the paper’s worked example (7.2.1) mistakenly starts with (∅, ∅) as the initial change rather than (∅, Ω), and this is why it works; but it’s not hard to find examples where starting with (∅, ∅) generates incorrect results. I’ve asked Michael Peyton-Jones about this and he found it plausible both that the algorithm was not practical and that there was a mistake in the example, although he’s more optimistic than I am that the algorithm might be salvageable.
+
 
 ## Chasing FDs
 
