@@ -9,17 +9,18 @@ hash-based tries; a query plan intersects them one variable at a time, either de
 | File | Contents |
 |------|----------|
 | `src/lib.rs` | Crate root: module wiring and re-exports. |
-| `src/value.rs` | The `Value` type (interned as `usize`) that everything joins over. |
+| `src/value.rs` | The `Value` type that everything joins over. |
 | `src/join.rs` | Core engine: databases, queries, tries, query plans, query execution. Many design comments. |
 | `src/var_order.rs` | Variable order picker. |
 | `src/op.rs` | Computational operators trait & implementations (eg. addition, ≤). |
-| `src/join_bfs.rs` | Breadth-first query execution prototype. Feel free to delete this. |
+| `src/join_bfs.rs` | Breadth-first query execution prototype. Disposable. |
 | `src/hash.rs` | `FxHasher` (fast non-cryptographic hash). Edit the `HashBuilder` definition in this file to switch from FxHash to Rust's default SipHash. |
 | `src/vec_db.rs` | Trivial vector-based `Database` used by tests & benchmarks. |
 | `src/graph.rs` | SNAP dataset loading and reference triangle finders using binary joins. |
 | `tests/queries.rs` | Simple query correctness tests on tiny data. |
 | `tests/self_check.rs` | Tests for `Query::{ground_vars, self_check}` (query well-formedness). |
 | `tests/var_order.rs` | Tests for `Query::structural_var_order`. |
+| `examples/basic.rs` | Basic example of running a query. |
 | `examples/triangles.rs` | Triangle-counting benchmark over SNAP graphs. |
 | `examples/join-v1.rs` | Earlier standalone prototype; superseded by the library. |
 | `download_snap_datasets.sh` | Fetches SNAP graph datasets into `data/`. |
@@ -51,12 +52,12 @@ query.self_check(&db); // check query is well-formed.
 let var_order = query.structural_var_order();
 let plan = query.plan(&var_order);
 let indexes = plan.build_indexes(&db);
-// Get an ExecutableQuery by binding indexes to plan. If a relation involved is
+// Get an ExecutableQuery by binding indexes to plan. If an index involved is
 // empty, binding the plan will fail; this indicates no query results.
 if let Some(exec) = plan.bind(&indexes) {
     // Iterate over solutions.
     exec.execute_dfs(|solution| {
-        // solution[i] = value for of var_order[i].
+        // solution[i] = value for var_order[i].
         // If you want them in the order of `query.vars`, do the remapping here.
         do_something_with(solution)
     });
@@ -71,15 +72,21 @@ TODO DESCRIBE
 
 ## Things to do next
 
-- Support constants in atoms. The trie indexing machinery for this is already present. The
-  operator machinery in ExecutableQuery::execute_dfs will need to be adjusted a little.
+- Support constants in atoms. The trie indexing machinery for this is already present.
+  This will need changes to `Atom`, `index_shape`, and `Query::plan`, as well as to how
+  operators are handled in `ExecutableQuery::execute_dfs` if they have constant arguments.
 
 - Split Schema out of the Database trait. Schema can probably just be a struct that maps
   relation ids to info about them (arity, FDs).
 
 - Support FD information. The simplest approach: each relation in a Schema gets an
-  optional primary key. This matches well with ACSets, where every entity type would get a
-  single relation with a primary key.
+  optional primary key. This matches well with ACSets under a "wide table" encoding where
+  every entity type gets a single relation with a primary key. (I believe this wide
+  encoding works better than a narrow table-per-morphism approach; eg. for a graph, it
+  allows an index to go directly from src to dst vertices without going through the edge
+  id first, which can make queries like finding triangles asymptotically faster. Chasing
+  FDs, as I suggest below, would automatically derive this "wide" representation from a
+  "narrow" representation.)
 
 - Use FD information in the variable order picker: pick determined variables immediately.
   We already do this for operators.
@@ -88,13 +95,13 @@ TODO DESCRIBE
 
 ## Optional, bigger todos
 
-- Switch from a tagged to an interned representation for values, or a smarter tagging
-  regime & execution engine to reduce tag-checking overhead. See `src/value.rs`. I've
-  implemented both tagged & interned value representations but not implemented
-  interning/deinterning, and interning is somewhat complicated if you want to de-allocate
-  interned values correctly over database updates. Doing tagging in a smarter way might be
-  the best approach but would require significant rewriting - not just to use fewer tags,
-  but to check them less often in query execution.
+- Switch the representation of values from (1) tagged to (2) interned, or use (3) a
+  smarter tagging regime & execution engine to reduce tag-checking overhead. See
+  `src/value.rs`. I've implemented both tagged & interned value representations but not
+  implemented interning/deinterning, and interning is somewhat complicated if you want to
+  de-allocate interned values correctly over database updates. Doing tagging in a smarter
+  way might be the best approach but would require significant rewriting - not just to use
+  fewer tags, but to check them less often in query execution.
 
 - Chase FDs in the query. This has the potential to significantly improve performance.
   See [Chasing FDs](#chasing-fds).
@@ -138,8 +145,8 @@ We then wish to translate a `DatabaseDiff` into a diff to the results of the que
 
 The indexes act as intermediate state passed between the original query execution and the
 incremental maintenance passes. You can think of the whole system as a (not necessarily
-finite) state machine, specifically a deterministic transducer, like a Moore or Mealy
-machine, or an optic but for charts instead of lenses:
+finite) state machine, specifically a deterministic transducer, like a Mealy machine, or
+an optic but for charts instead of lenses:
 
     initial pass: Input          → State × Output
     update pass:  State × ΔInput → State × ΔOutput
@@ -216,8 +223,12 @@ time linear in the size of the database! There are a few options here:
    both (here you want to dedup if they're not disjoint). To filter, check if either
    accepts. Managing the trie state gets tricky but not impossible.
 
-I think (2) or (3) are ideal but (1) might be good enough to get started and the poor
-man's version of (2) is quite easy and might be fast enough.
+I think (2) or (3) are ideal but (1) might be good enough to get started. The poor
+man's version of (2) is quite easy and might be fast enough for a while.
+
+Of course, an unsolved problem here is combining this factorization, which is based on
+only increasing changes, with the increasing/decreasing changes formulae from Fixing
+Incremental Computation. Good luck! I hope it's easy, but it might be hard.
 
 [pds]: https://en.wikipedia.org/wiki/Persistent_data_structure
 

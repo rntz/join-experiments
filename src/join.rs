@@ -618,9 +618,9 @@ impl<'a, Op: Operator> ExecutableQuery<'a, Op> {
         QueryDfsState {
             tries: self.tries.iter().map(|&t| match t {
                 Trie::Node(map) => map,
-                // We never read leaves but we need something to put here. We hit this
-                // case on a query with a fully-constant atom eg R(2) and also
-                // non-constant atoms eg T(x,y). TODO: test that hits this case.
+                // We never read leaves but we need something to put here. I think we hit
+                // this case on a query with both a fully-constant atom eg R(2) and some
+                // non-constant atoms. TODO: make a test that hits this case.
                 Trie::Leaf => &empty,
             }).collect(),
             levels: &self.levels,
